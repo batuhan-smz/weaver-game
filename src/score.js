@@ -1,0 +1,78 @@
+/**
+ * score.js — Scoring system with combo multiplier.
+ *
+ * Formula:
+ *   Score = (deletedBlocks × BASE_POINTS) + (comboMultiplier²  × COMBO_BONUS)
+ *
+ * Special combo labels:
+ *   "Mega Weaver"  — same move clears both a row/col AND a color cluster
+ *   "Line Blaster" — at least one row+col cleared simultaneously
+ *   "Color Burst"  — only color cluster cleared (no line)
+ */
+
+const BASE_POINTS  = 10;
+const COMBO_BONUS  = 50;
+const COMBO_DECAY  = 3000; // ms until combo resets if no move made
+
+export class ScoreSystem {
+  constructor() {
+    this.score          = 0;
+    this.best           = Number(localStorage.getItem('weaverBest') ?? 0);
+    this.comboMultiplier= 1;
+    this._lastMoveTime  = 0;
+    this._listeners     = [];
+  }
+
+  onChange(fn) { this._listeners.push(fn); }
+  _emit()      { for (const fn of this._listeners) fn(this); }
+
+  /**
+   * Records a clearing event and computes the score delta.
+   *
+   * @param {Object} params
+   * @param {number} params.deletedBlocks    total cells cleared
+   * @param {number} params.clearedRows      number of full rows cleared
+   * @param {number} params.clearedCols      number of full cols cleared
+   * @param {number} params.colorClusters    number of color clusters popped
+   * @param {number} params.now              performance.now() timestamp
+   * @returns {{ delta: number, label: string|null }}
+   */
+  record({ deletedBlocks, clearedRows, clearedCols, colorClusters, now }) {
+    // Combo decay
+    if (now - this._lastMoveTime > COMBO_DECAY) this.comboMultiplier = 1;
+    this._lastMoveTime = now;
+
+    const hasClear   = clearedRows + clearedCols > 0;
+    const hasCluster = colorClusters > 0;
+
+    // Determine event label
+    let label = null;
+    if (hasClear && hasCluster) label = 'MEGA WEAVER!';
+    else if (clearedRows > 0 && clearedCols > 0) label = 'LINE BLASTER!';
+    else if (hasClear)  label = 'LINE CLEAR!';
+    else if (hasCluster) label = 'COLOR BURST!';
+
+    const delta = (deletedBlocks * BASE_POINTS)
+                + (this.comboMultiplier ** 2) * COMBO_BONUS;
+
+    this.score += Math.round(delta);
+
+    // Increment combo for next move
+    this.comboMultiplier = Math.min(this.comboMultiplier + 1, 10);
+
+    if (this.score > this.best) {
+      this.best = this.score;
+      localStorage.setItem('weaverBest', this.best);
+    }
+
+    this._emit();
+    return { delta: Math.round(delta), label };
+  }
+
+  reset() {
+    this.score           = 0;
+    this.comboMultiplier = 1;
+    this._lastMoveTime   = 0;
+    this._emit();
+  }
+}
