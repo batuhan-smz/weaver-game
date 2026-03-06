@@ -1,47 +1,31 @@
 /**
  * firebase.js — Google Auth + Firestore cloud save for Weaver.
  *
- * SETUP (one-time, needs Firebase Console):
- *  1. https://console.firebase.google.com → New project (e.g. "weaver-game")
- *  2. Authentication → Sign-in method → Enable "Google"
- *  3. Firestore Database → Create database (start in test mode)
- *  4. Project Settings → Your apps → Add Web App → copy firebaseConfig below
- *  5. Authentication → Settings → Authorized domains → add your domain
+ * Config lives in ./firebase-config.js (gitignored).
+ * See firebase-config.example.js for the template.
  *
- * For Android (Capacitor):
- *  - Project Settings → Your apps → Add Android App (package: com.batuhan.weavergame)
- *  - Download google-services.json → place in android/app/
- *  - Add debug SHA-1 to Firebase (run: cd android && gradlew signingReport)
+ * Firebase Console setup:
+ *  1. Authentication → Sign-in method → Enable "Google"
+ *  2. Authentication → Authorized domains → add "localhost"
+ *  3. Firestore Database → Create (test mode)
  */
 
-// ─── Replace this block with your Firebase project config ────────────────────
-const FIREBASE_CONFIG = {
-  apiKey:            'YOUR_API_KEY',
-  authDomain:        'YOUR_PROJECT.firebaseapp.com',
-  projectId:         'YOUR_PROJECT_ID',
-  storageBucket:     'YOUR_PROJECT.appspot.com',
-  messagingSenderId: 'YOUR_SENDER_ID',
-  appId:             'YOUR_APP_ID',
-};
-// ─────────────────────────────────────────────────────────────────────────────
+// All new sign-ins receive a one-time welcome bonus
+const BONUS_COINS = 200;
 
-// Accounts that receive a one-time welcome bonus
-const BONUS_EMAILS = ['batuhansemiz15@gmail.com'];
-const BONUS_COINS  = 10_000;
-
-export const IS_CONFIGURED = !FIREBASE_CONFIG.apiKey.startsWith('YOUR_');
-
-const FIREBASE_VER = '11.3.1';
+const FIREBASE_VER = '10.14.1';
 const CDN = `https://www.gstatic.com/firebasejs/${FIREBASE_VER}`;
 
 // Lazy-loaded Firebase modules
-let _s = null; // { auth, db, mods }
+let _s = null;
 
 async function _init() {
   if (_s) return _s;
+  // Config loaded at runtime from gitignored file (never in source control)
+  const { FIREBASE_CONFIG } = await import('./firebase-config.js');
   const [
     { initializeApp },
-    { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged },
+    { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged },
     { getFirestore, doc, getDoc, setDoc, serverTimestamp },
   ] = await Promise.all([
     import(`${CDN}/firebase-app.js`),
@@ -53,17 +37,42 @@ async function _init() {
   const db   = getFirestore(app);
   _s = {
     auth, db,
-    GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
+    GoogleAuthProvider, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged,
     doc, getDoc, setDoc, serverTimestamp,
   };
   return _s;
 }
 
-/** Open Google sign-in popup. Returns UserCredential. */
+/**
+ * Initiate Google redirect sign-in.
+ * The result is picked up by onAuthStateChanged after the redirect completes.
+ * (signInWithPopup is not supported in Android WebView.)
+ */
 export async function googleSignIn() {
-  const s = await _init();
-  const provider = new s.GoogleAuthProvider();
-  return s.signInWithPopup(s.auth, provider);
+  try {
+    const s = await _init();
+    const provider = new s.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    await s.signInWithRedirect(s.auth, provider);
+  } catch (err) {
+    console.error('googleSignIn error:', err);
+    throw err;
+  }
+}
+
+/**
+ * Call once on every page load to complete any pending redirect sign-in.
+ * On success, onAuthStateChanged fires automatically with the new user.
+ */
+export async function checkRedirectResult() {
+  try {
+    const s = await _init();
+    const result = await s.getRedirectResult(s.auth);
+    return result; // null if no pending redirect
+  } catch (err) {
+    console.warn('checkRedirectResult:', err.code ?? err.message);
+    return null;
+  }
 }
 
 /** Sign out current user. */
@@ -74,13 +83,14 @@ export async function googleSignOut() {
 
 /**
  * Listen to auth state changes.
- * Calls cb(user | null) immediately and on every change.
+ * Calls cb(user | null) once immediately and on every change.
  * Returns an unsubscribe function.
  */
 export function onAuthChange(cb) {
-  if (!IS_CONFIGURED) { setTimeout(() => cb(null), 0); return () => {}; }
   let _unsub = () => {};
-  _init().then(s => { _unsub = s.onAuthStateChanged(s.auth, cb); });
+  _init()
+    .then(s => { _unsub = s.onAuthStateChanged(s.auth, cb); })
+    .catch(() => cb(null));
   return () => _unsub();
 }
 
@@ -106,11 +116,10 @@ export async function saveCloudSave(uid, data) {
 }
 
 /**
- * Apply one-time welcome bonus for BONUS_EMAILS accounts.
- * Returns bonus coin amount (0 if already given or not eligible).
+ * Apply one-time welcome bonus for new sign-ins.
+ * Returns bonus coin amount (0 if already given).
  */
 export async function applyBonusIfNeeded(uid, email) {
-  if (!BONUS_EMAILS.includes(email)) return 0;
   const s    = await _init();
   const ref  = s.doc(s.db, 'users', uid);
   const snap = await s.getDoc(ref);

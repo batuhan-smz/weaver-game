@@ -3,3 +3,6 @@ node_modules/
 .DS_Store
 *.log
 dist/
+# Firebase config files contain secrets — never commit these
+src/firebase-config.js
+www/src/firebase-config.js

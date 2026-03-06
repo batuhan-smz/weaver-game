@@ -368,7 +368,22 @@ html, body {
 }
 #ss-signout-btn:active { color: #ef4444; }
 
-/* ═══ Settings Page ═══ */
+/* ─── Bonus badge above sign-in button ─── */
+.signin-bonus-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: linear-gradient(135deg, #78350f55, #b4530922);
+  border: 1px solid #b45309aa;
+  color: #fde68a;
+  font-size: 0.78rem; letter-spacing: 0.5px;
+  padding: 6px 16px; border-radius: 20px;
+}
+.signin-bonus-badge strong { color: #fbbf24; }
+.signin-bonus-badge--settings {
+  display: flex; margin: 0 14px 8px;
+  border-radius: 10px;
+}
+
+
 #settings-header {
   flex-shrink: 0; padding: 12px 16px;
   display: flex; align-items: center;

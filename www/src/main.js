@@ -14,7 +14,7 @@ import { SKINS, EconomyStore } from './skins.js';
 import { POWERUPS, MarketStore } from './market.js';
 import { playPlace, playClear, playCluster, playMega, setSfxVolume, getSfxVolume } from './sounds.js';
 import {
-  IS_CONFIGURED, googleSignIn, googleSignOut, onAuthChange,
+  googleSignIn, googleSignOut, onAuthChange, checkRedirectResult,
   loadCloudSave, saveCloudSave, applyBonusIfNeeded,
 } from './firebase.js';
 
@@ -151,34 +151,11 @@ function _refreshSettingsAuth(user) {
 
 async function _handleSignIn() {
   try {
-    const cred = await googleSignIn();
-    const user = cred.user;
-    // Load cloud save and merge with local (cloud wins on higher values)
-    const cloud = await loadCloudSave(user.uid);
-    if (cloud) {
-      if ((cloud.coins ?? 0) > economy.coins) {
-        economy.coins = cloud.coins;
-        economy._save();
-      }
-      if (cloud.bestScore) {
-        const local = Number(localStorage.getItem('weaverBest') ?? 0);
-        if (cloud.bestScore > local) localStorage.setItem('weaverBest', cloud.bestScore);
-      }
-      if (cloud.unlockedIds) {
-        cloud.unlockedIds.forEach(id => economy.unlockedIds.add(id));
-        economy._save();
-      }
-      updateCoinDisplays();
-    }
-    // Apply one-time welcome bonus
-    const bonus = await applyBonusIfNeeded(user.uid, user.email);
-    if (bonus > 0) {
-      economy.addCoins(bonus);
-      updateCoinDisplays();
-      showToast(`🎉 +${bonus} 🪙 Hoş Geldin!`);
-    }
+    showToast('Google\'a yönlendiriliyor...');
+    await googleSignIn();
+    // Page will redirect; onAuthStateChanged fires when it returns
   } catch (err) {
-    if (err.code !== 'auth/popup-closed-by-user') showToast('Giriş başarısız');
+    showToast('Giriş başarısız: ' + (err.code ?? err.message ?? 'hata'));
   }
 }
 
@@ -193,18 +170,49 @@ document.getElementById('ss-signin-btn').addEventListener('click', _handleSignIn
 document.getElementById('ss-signout-btn').addEventListener('click', _handleSignOut);
 
 // Auth state listener
-onAuthChange(user => {
+onAuthChange(async user => {
   _applyAuthUI(user);
-  // Auto-save on sign-in
   if (user) {
-    saveCloudSave(user.uid, {
-      coins:        economy.coins,
-      unlockedIds:  [...economy.unlockedIds],
-      activeSkinId: economy.activeSkinId,
-      bestScore:    Number(localStorage.getItem('weaverBest') ?? 0),
-    }).catch(() => {});
+    // Load cloud save and merge (cloud wins on higher values)
+    try {
+      const cloud = await loadCloudSave(user.uid);
+      if (cloud) {
+        if ((cloud.coins ?? 0) > economy.coins) {
+          economy.coins = cloud.coins;
+          economy._save();
+        }
+        if (cloud.bestScore) {
+          const local = Number(localStorage.getItem('weaverBest') ?? 0);
+          if (cloud.bestScore > local) localStorage.setItem('weaverBest', cloud.bestScore);
+        }
+        if (cloud.unlockedIds) {
+          cloud.unlockedIds.forEach(id => economy.unlockedIds.add(id));
+          economy._save();
+        }
+        updateCoinDisplays();
+      }
+      // One-time welcome bonus
+      const bonus = await applyBonusIfNeeded(user.uid, user.email);
+      if (bonus > 0) {
+        economy.addCoins(bonus);
+        updateCoinDisplays();
+        showToast(`🎉 +${bonus} 🪙 Hoş Geldin!`);
+      }
+      // Save current state to cloud
+      saveCloudSave(user.uid, {
+        coins:        economy.coins,
+        unlockedIds:  [...economy.unlockedIds],
+        activeSkinId: economy.activeSkinId,
+        bestScore:    Number(localStorage.getItem('weaverBest') ?? 0),
+      }).catch(() => {});
+    } catch (e) {
+      console.warn('Cloud sync error:', e);
+    }
   }
 });
+
+// Process any pending redirect sign-in (must run on every page load)
+checkRedirectResult().catch(() => {});
 
 // ── Settings page ─────────────────────────────────────────────────────────────
 
