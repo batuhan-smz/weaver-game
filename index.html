@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Weaver — Block Puzzle</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>WEAVER</h1>
+      <div id="score-panel">
+        <div class="score-box">
+          <span class="label">SCORE</span>
+          <span id="score-display">0</span>
+        </div>
+        <div class="score-box">
+          <span class="label">BEST</span>
+          <span id="best-display">0</span>
+        </div>
+        <div class="score-box">
+          <span class="label">COMBO</span>
+          <span id="combo-display">x1</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div id="game-container">
+        <canvas id="grid-canvas" width="460" height="460"></canvas>
+        <canvas id="fx-canvas"   width="460" height="460"></canvas>
+      </div>
+      <div id="tray">
+        <canvas id="block0" class="block-preview" width="120" height="120"></canvas>
+        <canvas id="block1" class="block-preview" width="120" height="120"></canvas>
+        <canvas id="block2" class="block-preview" width="120" height="120"></canvas>
+        <canvas id="block3" class="block-preview" width="120" height="120"></canvas>
+      </div>
+    </main>
+
+    <div id="feedback-toast"></div>
+
+    <div id="gameover-overlay" class="hidden">
+      <div id="gameover-box">
+        <h2>GAME OVER</h2>
+        <p>Score: <strong id="final-score">0</strong></p>
+        <button id="restart-btn">Play Again</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
