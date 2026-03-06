@@ -61,9 +61,9 @@ export async function googleSignIn() {
   const s = await _init();
 
   if (IS_NATIVE) {
-    // Use native Capacitor Google Auth plugin
-    const { GoogleAuth } = await import('/node_modules/@codetrix-studio/capacitor-google-auth/dist/esm/index.js');
-    await GoogleAuth.initialize();
+    // Native Capacitor plugin registered on the bridge — no JS import needed
+    const GoogleAuth = window.Capacitor?.Plugins?.GoogleAuth;
+    if (!GoogleAuth) throw new Error('GoogleAuth plugin not found on Capacitor bridge');
     const googleUser = await GoogleAuth.signIn();
     const credential = s.GoogleAuthProvider.credential(
       googleUser.authentication.idToken,
@@ -82,8 +82,8 @@ export async function googleSignOut() {
   if (!_s) return;
   if (IS_NATIVE) {
     try {
-      const { GoogleAuth } = await import('/node_modules/@codetrix-studio/capacitor-google-auth/dist/esm/index.js');
-      await GoogleAuth.signOut();
+      const GoogleAuth = window.Capacitor?.Plugins?.GoogleAuth;
+      if (GoogleAuth) await GoogleAuth.signOut();
     } catch (_) {}
   }
   return _s.signOut(_s.auth);
