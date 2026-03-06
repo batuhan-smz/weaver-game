@@ -1,0 +1,21 @@
+{
+  "name": "weaver-game",
+  "version": "1.0.0",
+  "description": "Weaver - Block puzzle game with BFS color clusters",
+  "main": "index.html",
+  "scripts": {
+    "build": "robocopy index.html www /IS /IT & robocopy style.css www /IS /IT & robocopy src www\\src /E /IS /IT & robocopy assets www\\assets /E /IS /IT & exit 0",
+    "sync": "npm run build && npx cap sync",
+    "android": "npx cap open android"
+  },
+  "keywords": ["game", "puzzle", "block"],
+  "author": "batuhan-smz",
+  "license": "MIT",
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/core": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0"
+  }
+}
