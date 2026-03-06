@@ -12,7 +12,11 @@ import { ParticleSystem }    from './particles.js';
 import { isGameOver }        from './gameover.js';
 import { SKINS, EconomyStore } from './skins.js';
 import { POWERUPS, MarketStore } from './market.js';
-import { playPlace, playClear, playCluster, playMega } from './sounds.js';
+import { playPlace, playClear, playCluster, playMega, setSfxVolume, getSfxVolume } from './sounds.js';
+import {
+  IS_CONFIGURED, googleSignIn, googleSignOut, onAuthChange,
+  loadCloudSave, saveCloudSave, applyBonusIfNeeded,
+} from './firebase.js';
 
 const TRAY_SIZE  = 4;
 const HARD_EVERY = 5;
@@ -45,6 +49,7 @@ const mainApp      = document.getElementById('main-app');
 const pagePlay     = document.getElementById('page-play');
 const pageSkins    = document.getElementById('page-skins');
 const pageMarket   = document.getElementById('page-market');
+const pageSettings = document.getElementById('page-settings');
 const overlayEl    = document.getElementById('gameover-overlay');
 const toastEl      = document.getElementById('feedback-toast');
 const buyRandomBtn = document.getElementById('buy-random-btn');
@@ -59,14 +64,16 @@ document.getElementById('ss-coins').textContent = economy.coins;
 // ── Navigation ───────────────────────────────────────────────────────────────
 
 function showPage(name) {
-  pagePlay.classList.toggle('hidden',   name !== 'play');
-  pageSkins.classList.toggle('hidden',  name !== 'skins');
-  pageMarket.classList.toggle('hidden', name !== 'market');
+  pagePlay.classList.toggle('hidden',     name !== 'play');
+  pageSkins.classList.toggle('hidden',    name !== 'skins');
+  pageMarket.classList.toggle('hidden',   name !== 'market');
+  pageSettings.classList.toggle('hidden', name !== 'settings');
   document.querySelectorAll('.nav-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.page === name)
   );
-  if (name === 'skins')  renderSkinsPage();
-  if (name === 'market') renderMarketPage();
+  if (name === 'skins')    renderSkinsPage();
+  if (name === 'market')   renderMarketPage();
+  if (name === 'settings') renderSettingsPage();
 }
 
 document.querySelectorAll('.nav-btn').forEach(btn =>
@@ -99,7 +106,131 @@ document.getElementById('restart-btn').addEventListener('click', () => {
   showPage('play');
 });
 
-// ── Buy random skin ──────────────────────────────────────────────────────────
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+let _currentUser = null;
+
+/** Sync UI elements that reflect sign-in state. */
+function _applyAuthUI(user) {
+  _currentUser = user;
+
+  // Start screen profile row
+  const ssProfile  = document.getElementById('ss-profile');
+  const ssAvatar   = document.getElementById('ss-avatar');
+  const ssUsername = document.getElementById('ss-username');
+  const ssSignin   = document.getElementById('ss-signin-btn');
+  if (user) {
+    ssAvatar.src     = user.photoURL || '';
+    ssUsername.textContent = user.displayName || user.email;
+    ssProfile.classList.remove('hidden');
+    ssSignin.classList.add('hidden');
+  } else {
+    ssProfile.classList.add('hidden');
+    ssSignin.classList.remove('hidden');
+  }
+
+  // Settings page (if currently shown)
+  _refreshSettingsAuth(user);
+}
+
+function _refreshSettingsAuth(user) {
+  const out = document.getElementById('settings-signed-out');
+  const ind = document.getElementById('settings-signed-in');
+  if (!out || !ind) return;
+  if (user) {
+    document.getElementById('settings-avatar').src = user.photoURL || '';
+    document.getElementById('settings-username').textContent = user.displayName || '';
+    document.getElementById('settings-email').textContent    = user.email || '';
+    out.classList.add('hidden');
+    ind.classList.remove('hidden');
+  } else {
+    out.classList.remove('hidden');
+    ind.classList.add('hidden');
+  }
+}
+
+async function _handleSignIn() {
+  try {
+    const cred = await googleSignIn();
+    const user = cred.user;
+    // Load cloud save and merge with local (cloud wins on higher values)
+    const cloud = await loadCloudSave(user.uid);
+    if (cloud) {
+      if ((cloud.coins ?? 0) > economy.coins) {
+        economy.coins = cloud.coins;
+        economy._save();
+      }
+      if (cloud.bestScore) {
+        const local = Number(localStorage.getItem('weaverBest') ?? 0);
+        if (cloud.bestScore > local) localStorage.setItem('weaverBest', cloud.bestScore);
+      }
+      if (cloud.unlockedIds) {
+        cloud.unlockedIds.forEach(id => economy.unlockedIds.add(id));
+        economy._save();
+      }
+      updateCoinDisplays();
+    }
+    // Apply one-time welcome bonus
+    const bonus = await applyBonusIfNeeded(user.uid, user.email);
+    if (bonus > 0) {
+      economy.addCoins(bonus);
+      updateCoinDisplays();
+      showToast(`🎉 +${bonus} 🪙 Hoş Geldin!`);
+    }
+  } catch (err) {
+    if (err.code !== 'auth/popup-closed-by-user') showToast('Giriş başarısız');
+  }
+}
+
+async function _handleSignOut() {
+  await googleSignOut();
+}
+
+// Sign-in buttons (start screen + settings page)
+document.getElementById('ss-signin-btn').addEventListener('click', _handleSignIn);
+
+// Sign-out on start screen profile
+document.getElementById('ss-signout-btn').addEventListener('click', _handleSignOut);
+
+// Auth state listener
+onAuthChange(user => {
+  _applyAuthUI(user);
+  // Auto-save on sign-in
+  if (user) {
+    saveCloudSave(user.uid, {
+      coins:        economy.coins,
+      unlockedIds:  [...economy.unlockedIds],
+      activeSkinId: economy.activeSkinId,
+      bestScore:    Number(localStorage.getItem('weaverBest') ?? 0),
+    }).catch(() => {});
+  }
+});
+
+// ── Settings page ─────────────────────────────────────────────────────────────
+
+function renderSettingsPage() {
+  // Volume slider
+  const slider = document.getElementById('sfx-volume-slider');
+  const label  = document.getElementById('sfx-volume-val');
+  const v = Math.round(getSfxVolume() * 100);
+  slider.value    = v;
+  label.textContent = `${v}%`;
+  slider.oninput = () => {
+    const pct = Number(slider.value);
+    label.textContent = `${pct}%`;
+    setSfxVolume(pct / 100);
+  };
+
+  // Settings sign-in/sign-out buttons
+  const siBtn = document.getElementById('settings-signin-btn');
+  const soBtn = document.getElementById('settings-signout-btn');
+  if (siBtn) siBtn.onclick = _handleSignIn;
+  if (soBtn) soBtn.onclick = _handleSignOut;
+
+  _refreshSettingsAuth(_currentUser);
+}
+
+
 
 buyRandomBtn.addEventListener('click', () => {
   const result = economy.buyRandom();
@@ -409,6 +540,15 @@ class Game {
     document.getElementById('final-score').textContent = this.scoreSystem.score.toLocaleString();
     document.getElementById('final-coins').textContent = `+${earned} \uD83E\uDE99`;
     overlayEl.classList.remove('hidden');
+    // Auto-save progress to cloud
+    if (_currentUser) {
+      saveCloudSave(_currentUser.uid, {
+        coins:        economy.coins,
+        unlockedIds:  [...economy.unlockedIds],
+        activeSkinId: economy.activeSkinId,
+        bestScore:    Number(localStorage.getItem('weaverBest') ?? 0),
+      }).catch(() => {});
+    }
   }
 
   // ── Restart ────────────────────────────────────────────────────────────────

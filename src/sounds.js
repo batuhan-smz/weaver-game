@@ -3,7 +3,17 @@
  * No external files required.
  */
 
-let _ctx = null;
+let _ctx        = null;
+let _masterGain = null;
+let _volume     = parseFloat(localStorage.getItem('weaverSfxVolume') ?? '0.7');
+
+export function setSfxVolume(v) {
+  _volume = Math.max(0, Math.min(1, v));
+  localStorage.setItem('weaverSfxVolume', String(_volume));
+  if (_masterGain) _masterGain.gain.value = _volume;
+}
+
+export function getSfxVolume() { return _volume; }
 
 function getCtx() {
   if (!_ctx) _ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -13,8 +23,15 @@ function getCtx() {
 function resume() {
   const ctx = getCtx();
   if (ctx.state === 'suspended') ctx.resume();
+  if (!_masterGain) {
+    _masterGain = ctx.createGain();
+    _masterGain.gain.value = _volume;
+    _masterGain.connect(ctx.destination);
+  }
   return ctx;
 }
+
+function dest() { resume(); return _masterGain ?? getCtx().destination; }
 
 /**
  * Short sine "thud" — block placement.
@@ -25,7 +42,7 @@ export function playPlace() {
     const t = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-    osc.connect(gain); gain.connect(ctx.destination);
+    osc.connect(gain); gain.connect(dest());
     osc.type = 'sine';
     osc.frequency.setValueAtTime(220, t);
     osc.frequency.exponentialRampToValueAtTime(110, t + 0.08);
@@ -45,7 +62,7 @@ export function playClear() {
     for (let i = 0; i < 2; i++) {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
+      osc.connect(gain); gain.connect(dest());
       osc.type = 'triangle';
       const freq = i === 0 ? 440 : 660;
       osc.frequency.setValueAtTime(freq, t + i * 0.07);
@@ -68,7 +85,7 @@ export function playCluster() {
     freqs.forEach((f, i) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
+      osc.connect(gain); gain.connect(dest());
       osc.type = 'sine';
       osc.frequency.setValueAtTime(f, t + i * 0.05);
       osc.frequency.exponentialRampToValueAtTime(f * 1.5, t + i * 0.05 + 0.25);
@@ -90,7 +107,7 @@ export function playMega() {
     freqs.forEach((f, i) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
+      osc.connect(gain); gain.connect(dest());
       osc.type = 'square';
       osc.frequency.setValueAtTime(f, t + i * 0.08);
       gain.gain.setValueAtTime(0.12, t + i * 0.08);

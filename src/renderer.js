@@ -209,18 +209,40 @@ export class Renderer {
       requestAnimationFrame(() => {
         _rafPending = false;
         if (!this.dragging || !_lastPt) return;
-        // Offset so finger aligns to the bottom-centre of the block
-        const bb = this.dragging.block.getBoundingBox();
-        const yOff = bb.rows * (this.CELL + this.GAP);
-        const xOff = Math.floor(bb.cols / 2) * (this.CELL + this.GAP);
-        const raw = this._screenToGrid(_lastPt.x - xOff, _lastPt.y - yOff);
-        if (raw.row < 0) {
-          // Finger outside grid — hide ghost
+
+        // Offset so the block appears above the finger (finger ≈ bottom-centre of block)
+        const bb   = this.dragging.block.getBoundingBox();
+        const step = this.CELL + this.GAP;
+        const yOff = bb.rows * step;
+        const xOff = Math.floor(bb.cols / 2) * step;
+
+        // Compute grid row/col from offset-adjusted finger position.
+        // We clamp manually rather than using _screenToGrid so the ghost stays
+        // visible when the offset pushes the anchor slightly above/left of the grid.
+        const rect   = this.gridCanvas.getBoundingClientRect();
+        const scaleX = this.gridCanvas.width  / rect.width;
+        const scaleY = this.gridCanvas.height / rect.height;
+        const adjX   = (_lastPt.x - xOff - rect.left) * scaleX;
+        const adjY   = (_lastPt.y - yOff - rect.top)  * scaleY;
+        const rawRow = Math.floor((adjY - this.PADDING) / step);
+        const rawCol = Math.floor((adjX - this.PADDING) / step);
+
+        // If the actual fingertip is clearly outside the grid area, hide ghost
+        const fingerY = _lastPt.y - rect.top;
+        const fingerX = _lastPt.x - rect.left;
+        if (fingerY > rect.height + 20 || fingerY < -20 ||
+            fingerX < -20             || fingerX > rect.width + 20) {
           this.drawGhostAndHover(null, -1, -1, false);
           _lastSnap = null;
           return;
         }
-        const snap = this._snapToNearest(this.dragging.block, raw.row, raw.col);
+
+        // Clamp to valid grid range so the ghost never disappears just
+        // because the offset moved the anchor slightly out of bounds
+        const clampedRow = Math.max(0, Math.min(Grid.SIZE - 1, rawRow));
+        const clampedCol = Math.max(0, Math.min(Grid.SIZE - 1, rawCol));
+
+        const snap = this._snapToNearest(this.dragging.block, clampedRow, clampedCol);
         _lastSnap = snap;
         this.drawGhostAndHover(this.dragging.block, snap.row, snap.col, snap.canPlace);
       });

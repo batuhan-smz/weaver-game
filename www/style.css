@@ -339,8 +339,108 @@ html, body {
 }
 #restart-btn:active { transform: scale(0.95); }
 
+/* ═══ Start Screen — Google login ═══ */
+#ss-signin-btn {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  background: #fff;
+  color: #3c4043; font-size: 0.9rem; font-weight: 700;
+  border: none; border-radius: 14px;
+  padding: 12px 28px;
+  cursor: pointer; letter-spacing: 0.5px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+  transition: opacity 0.15s, transform 0.12s;
+}
+#ss-signin-btn:active { opacity: 0.8; transform: scale(0.96); }
 
-/* ===== App Layout ===== */
+#ss-profile {
+  display: flex; align-items: center; gap: 10px;
+  background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 14px;
+  padding: 8px 16px;
+}
+#ss-avatar {
+  width: 32px; height: 32px; border-radius: 50%;
+  object-fit: cover; border: 2px solid #a78bfa;
+}
+#ss-username { font-size: 0.88rem; font-weight: 700; color: #c4b5fd; flex: 1; }
+#ss-signout-btn {
+  background: none; border: none; color: #7c7caa;
+  font-size: 1rem; cursor: pointer; padding: 2px 6px;
+}
+#ss-signout-btn:active { color: #ef4444; }
+
+/* ═══ Settings Page ═══ */
+#settings-header {
+  flex-shrink: 0; padding: 12px 16px;
+  display: flex; align-items: center;
+  border-bottom: 1px solid #1e1e36; height: 50px;
+}
+#settings-header h2 { font-size: 1.1rem; letter-spacing: 4px; color: #a78bfa; }
+
+#settings-body {
+  flex: 1; overflow-y: auto;
+  display: flex; flex-direction: column;
+  gap: 12px; padding: 14px 14px 24px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.settings-section {
+  background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 14px;
+  overflow: hidden;
+}
+.settings-section-title {
+  font-size: 0.62rem; letter-spacing: 2px; font-weight: 700; color: #7c7caa;
+  padding: 10px 14px 6px; border-bottom: 1px solid #2a2a4a;
+}
+.settings-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; gap: 12px;
+}
+.settings-label { font-size: 0.85rem; color: #e0e0ff; font-weight: 600; flex-shrink: 0; }
+.settings-slider-wrap { display: flex; align-items: center; gap: 10px; flex: 1; justify-content: flex-end; }
+#sfx-volume-slider {
+  -webkit-appearance: none; appearance: none;
+  width: 130px; height: 4px;
+  background: #2a2a4a; border-radius: 4px; outline: none;
+}
+#sfx-volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: linear-gradient(135deg, #a78bfa, #60a5fa);
+  cursor: pointer; border: 2px solid #0d0d1a;
+}
+#sfx-volume-val { font-size: 0.8rem; color: #a78bfa; font-weight: 700; min-width: 36px; text-align: right; }
+
+.settings-hint {
+  font-size: 0.78rem; color: #7c7caa; margin: 10px 14px 8px;
+}
+.settings-btn {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  border: none; border-radius: 10px;
+  padding: 11px 18px; font-size: 0.85rem; font-weight: 700;
+  cursor: pointer; margin: 0 14px 12px; letter-spacing: 0.5px;
+  transition: opacity 0.15s;
+}
+.settings-btn--google { background: #fff; color: #3c4043; }
+.settings-btn--danger  { background: #3b1b1b; color: #f87171; }
+.settings-btn:active { opacity: 0.75; }
+
+.settings-profile-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px 8px;
+}
+#settings-avatar {
+  width: 44px; height: 44px; border-radius: 50%;
+  object-fit: cover; border: 2px solid #a78bfa;
+}
+.settings-profile-info { display: flex; flex-direction: column; gap: 2px; }
+#settings-username { font-size: 0.9rem; font-weight: 700; color: #c4b5fd; }
+#settings-email    { font-size: 0.72rem; color: #7c7caa; }
+
+.settings-version {
+  text-align: center; font-size: 0.62rem; color: #3a3a5a; letter-spacing: 2px; margin-top: 4px;
+}
+
+
 #app {
   display: flex;
   flex-direction: column;
