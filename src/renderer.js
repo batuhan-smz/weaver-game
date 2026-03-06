@@ -61,10 +61,11 @@ export class Renderer {
 
   resize() {
     const S      = this.gridCanvas.width;
-    this.GAP     = 2;
-    this.PADDING = Math.max(3, Math.floor(S * 0.012));
-    this.CELL    = Math.floor((S - this.PADDING*2 - this.GAP*9) / 10);
-    this.RADIUS  = Math.max(3, Math.floor(this.CELL * 0.14));
+    const N      = Grid.SIZE; // 8
+    this.GAP     = Math.max(2, Math.floor(S * 0.008));
+    this.PADDING = Math.max(2, Math.floor(S * 0.008));
+    this.CELL    = Math.floor((S - this.PADDING*2 - this.GAP*(N-1)) / N);
+    this.RADIUS  = Math.max(3, Math.floor(this.CELL * 0.12));
     this._drawGrid();
   }
 
@@ -97,8 +98,9 @@ export class Renderer {
     const x = this._cellX(col), y = this._cellY(row);
     const sz = this.CELL, cr = this.RADIUS;
     const tw = this.tweens.get(`${row},${col}`);
-    // Clear exactly the cell area — no bleed into neighbours
-    ctx.clearRect(x, y, sz, sz);
+    // Overwrite cell + 1px border with gap colour to erase any skin bleed
+    ctx.fillStyle = GRID_LINE;
+    ctx.fillRect(x - 1, y - 1, sz + 2, sz + 2);
     if (cell.isEmpty) {
       ctx.fillStyle = EMPTY_COLOR;
       _rr(ctx, x, y, sz, sz, cr); ctx.fill();
