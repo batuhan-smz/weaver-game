@@ -34,14 +34,14 @@ export class Cell {
 }
 
 /**
- * Grid — 10×10 matrix of Cell objects.
+ * Grid — 8×8 matrix of Cell objects.
  *
  * Observer Pattern:
  *   Instead of scanning the full grid on every frame, mutations are
  *   tracked in a DirtyCells set.  Consumers drain it with `drainDirty()`.
  */
 export class Grid {
-  static SIZE = 10;
+  static SIZE = 8;
 
   constructor() {
     /** @type {Cell[][]} */

@@ -6,6 +6,8 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>Weaver</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -75,6 +77,20 @@
       <div id="skins-grid"></div>
     </div>
 
+    <!-- ── PAGE: MARKET ── -->
+    <div id="page-market" class="page hidden">
+      <div id="market-header">
+        <h2>MARKET</h2>
+        <div id="market-coin-row">
+          <span class="coin-icon">🪙</span>
+          <span id="market-coin-display">0</span>
+        </div>
+      </div>
+      <div id="market-grid"></div>
+      <!-- Active power-up bar (shown during game) -->
+      <div id="powerup-bar" class="hidden"></div>
+    </div>
+
     <!-- ── BOTTOM NAV ── -->
     <nav id="bottom-nav">
       <button class="nav-btn active" data-page="play">
@@ -89,12 +105,19 @@
         <span class="nav-icon">🎨</span>
         <span class="nav-label">SKINS</span>
       </button>
+      <button class="nav-btn" data-page="market">
+        <span class="nav-icon">🛒</span>
+        <span class="nav-label">MARKET</span>
+      </button>
     </nav>
 
   </div>
 
   <!-- ══════════ OVERLAYS ══════════ -->
   <div id="feedback-toast"></div>
+
+  <!-- Power-up targeting hint -->
+  <div id="powerup-hint" class="hidden">Tap a cell on the grid</div>
 
   <div id="gameover-overlay" class="hidden">
     <div id="gameover-box">

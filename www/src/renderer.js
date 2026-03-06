@@ -74,7 +74,9 @@ export class Renderer {
   _cellY(row) { return this.PADDING + row * (this.CELL + this.GAP); }
 
   _drawGrid() {
-    this.gridCtx.clearRect(0, 0, this.gridCanvas.width, this.gridCanvas.height);
+    // Fill entire canvas with gap colour first so inter-cell gaps are always clean
+    this.gridCtx.fillStyle = GRID_LINE;
+    this.gridCtx.fillRect(0, 0, this.gridCanvas.width, this.gridCanvas.height);
     for (let r = 0; r < Grid.SIZE; r++)
       for (let c = 0; c < Grid.SIZE; c++)
         this._drawCell(r, c);
@@ -95,7 +97,8 @@ export class Renderer {
     const x = this._cellX(col), y = this._cellY(row);
     const sz = this.CELL, cr = this.RADIUS;
     const tw = this.tweens.get(`${row},${col}`);
-    ctx.clearRect(x-1, y-1, sz+2, sz+2);
+    // Clear exactly the cell area — no bleed into neighbours
+    ctx.clearRect(x, y, sz, sz);
     if (cell.isEmpty) {
       ctx.fillStyle = EMPTY_COLOR;
       _rr(ctx, x, y, sz, sz, cr); ctx.fill();
@@ -109,9 +112,9 @@ export class Renderer {
         const cx = x+sz/2, cy = y+sz/2;
         ctx.translate(cx,cy); ctx.scale(sc,sc); ctx.translate(-cx,-cy);
       }
-      ctx.globalAlpha = Math.min(1, p < 0.08 ? p/0.08 : 1);
+      ctx.globalAlpha = p < 0.08 ? p/0.08 : 1;
       this.skin.drawCell(ctx, x, y, sz, hex, cr);
-      ctx.restore(); ctx.globalAlpha = 1;
+      ctx.restore();
     }
   }
 
@@ -160,9 +163,38 @@ export class Renderer {
       this.skin.drawCell(ctx, ox+dc*(cs+gap), oy+dr*(cs+gap), cs, hex, cr);
   }
 
+  /**
+   * Given a raw (row,col) under the finger, find the nearest grid position
+   * where `block` can be placed. Searches outward in a spiral up to `maxDist`
+   * cells away. Returns {row, col, canPlace} with canPlace=false if nothing fits.
+   */
+  _snapToNearest(block, rawRow, rawCol, maxDist = 3) {
+    // Fast path: exact position fits
+    if (rawRow >= 0 && this.grid.canPlace(block.getAbsolutePositions(rawRow, rawCol)))
+      return { row: rawRow, col: rawCol, canPlace: true };
+
+    let best = null, bestDist = Infinity;
+    for (let dr = -maxDist; dr <= maxDist; dr++) {
+      for (let dc = -maxDist; dc <= maxDist; dc++) {
+        const r = rawRow + dr, c = rawCol + dc;
+        if (r < 0 || c < 0 || r >= Grid.SIZE || c >= Grid.SIZE) continue;
+        const d = Math.abs(dr) + Math.abs(dc);
+        if (d >= bestDist) continue;
+        if (this.grid.canPlace(block.getAbsolutePositions(r, c))) {
+          best = { row: r, col: c };
+          bestDist = d;
+        }
+      }
+    }
+    if (best) return { ...best, canPlace: true };
+    // Nothing fits nearby — show red ghost at raw position
+    return { row: Math.max(0, Math.min(Grid.SIZE - 1, rawRow)), col: Math.max(0, Math.min(Grid.SIZE - 1, rawCol)), canPlace: false };
+  }
+
   _bindDrag() {
     let _rafPending = false;
     let _lastPt = null;
+    let _lastSnap = null;
     const onMove = (e) => {
       if (!this.dragging) return;
       e.preventDefault();
@@ -173,18 +205,25 @@ export class Renderer {
       requestAnimationFrame(() => {
         _rafPending = false;
         if (!this.dragging || !_lastPt) return;
-        const {row,col} = this._screenToGrid(_lastPt.x, _lastPt.y);
-        const canPlace = row>=0 ? this.grid.canPlace(this.dragging.block.getAbsolutePositions(row,col)) : false;
-        this.drawGhostAndHover(this.dragging.block, row, col, canPlace);
+        const raw = this._screenToGrid(_lastPt.x, _lastPt.y);
+        if (raw.row < 0) {
+          // Finger outside grid — hide ghost
+          this.drawGhostAndHover(null, -1, -1, false);
+          _lastSnap = null;
+          return;
+        }
+        const snap = this._snapToNearest(this.dragging.block, raw.row, raw.col);
+        _lastSnap = snap;
+        this.drawGhostAndHover(this.dragging.block, snap.row, snap.col, snap.canPlace);
       });
     };
     const onUp = (e) => {
       if (!this.dragging) return;
-      const pt = e.changedTouches ? e.changedTouches[0] : e;
-      const {row,col} = this._screenToGrid(pt.clientX, pt.clientY);
-      if (row>=0 && this.onDrop) this.onDrop(this.dragging.block, this.dragging.el, row, col);
+      const snapped = _lastSnap;
+      if (snapped && snapped.canPlace && this.onDrop)
+        this.onDrop(this.dragging.block, this.dragging.el, snapped.row, snapped.col);
       this.dragging.el.classList.remove('dragging');
-      this.dragging = null; _lastPt = null; _rafPending = false;
+      this.dragging = null; _lastPt = null; _lastSnap = null; _rafPending = false;
       // fxCtx cleared by the game loop next frame — don't wipe live particles here
     };
     document.querySelectorAll('.block-preview').forEach((el,idx) => {
@@ -217,4 +256,22 @@ export class Renderer {
   }
 
   setBlockProvider(fn) { this._getBlockForIndex = fn; }
+
+  /** Re-bind drag start listeners (call after new .block-preview elements are added). */
+  rebindDrag() {
+    document.querySelectorAll('.block-preview').forEach((el, idx) => {
+      // Remove old listener by cloning (simple, idempotent)
+      const clone = el.cloneNode(true);
+      el.replaceWith(clone);
+      const start = (e) => {
+        e.preventDefault();
+        const block = this._getBlockForIndex(idx);
+        if (!block || clone.classList.contains('used')) return;
+        this.dragging = { block, el: clone, idx };
+        clone.classList.add('dragging');
+      };
+      clone.addEventListener('mousedown',  start);
+      clone.addEventListener('touchstart', start, { passive: false });
+    });
+  }
 }

@@ -11,6 +11,7 @@ import { ScoreSystem }       from './score.js';
 import { ParticleSystem }    from './particles.js';
 import { isGameOver }        from './gameover.js';
 import { SKINS, EconomyStore } from './skins.js';
+import { POWERUPS, MarketStore } from './market.js';
 import { playPlace, playClear, playCluster, playMega } from './sounds.js';
 
 const TRAY_SIZE  = 4;
@@ -34,6 +35,7 @@ function computeTraySize(gridSize) {
 // ── Global state ────────────────────────────────────────────────────────────
 
 const economy = new EconomyStore();
+const market  = new MarketStore();
 let game      = null;
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
@@ -42,10 +44,13 @@ const startScreen  = document.getElementById('start-screen');
 const mainApp      = document.getElementById('main-app');
 const pagePlay     = document.getElementById('page-play');
 const pageSkins    = document.getElementById('page-skins');
+const pageMarket   = document.getElementById('page-market');
 const overlayEl    = document.getElementById('gameover-overlay');
 const toastEl      = document.getElementById('feedback-toast');
 const buyRandomBtn = document.getElementById('buy-random-btn');
 const skinsGrid    = document.getElementById('skins-grid');
+const marketGrid   = document.getElementById('market-grid');
+const powerupHint  = document.getElementById('powerup-hint');
 
 // Update start screen
 document.getElementById('ss-best').textContent  = Number(localStorage.getItem('weaverBest') ?? 0).toLocaleString();
@@ -54,12 +59,14 @@ document.getElementById('ss-coins').textContent = economy.coins;
 // ── Navigation ───────────────────────────────────────────────────────────────
 
 function showPage(name) {
-  pagePlay.classList.toggle('hidden',  name !== 'play');
-  pageSkins.classList.toggle('hidden', name !== 'skins');
+  pagePlay.classList.toggle('hidden',   name !== 'play');
+  pageSkins.classList.toggle('hidden',  name !== 'skins');
+  pageMarket.classList.toggle('hidden', name !== 'market');
   document.querySelectorAll('.nav-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.page === name)
   );
-  if (name === 'skins') renderSkinsPage();
+  if (name === 'skins')  renderSkinsPage();
+  if (name === 'market') renderMarketPage();
 }
 
 document.querySelectorAll('.nav-btn').forEach(btn =>
@@ -160,8 +167,10 @@ function updateCoinDisplays() {
   const c = economy.coins;
   const eC = document.getElementById('coin-display');
   const eS = document.getElementById('skins-coin-display');
+  const eM = document.getElementById('market-coin-display');
   if (eC) eC.textContent = c;
   if (eS) eS.textContent = c;
+  if (eM) eM.textContent = c;
 }
 
 let _toastTimer = null;
@@ -170,6 +179,57 @@ function showToast(msg) {
   toastEl.classList.add('show');
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1500);
+}
+
+// ── Market page ───────────────────────────────────────────────────────────────
+
+function renderMarketPage() {
+  document.getElementById('market-coin-display').textContent = economy.coins;
+  marketGrid.innerHTML = '';
+  for (const pu of POWERUPS) {
+    const item = document.createElement('div');
+    item.className = 'market-item';
+
+    const icon = document.createElement('div');
+    icon.className = 'market-item-icon'; icon.textContent = pu.icon;
+
+    const info = document.createElement('div');
+    info.className = 'market-item-info';
+    info.innerHTML = `<div class="market-item-name">${pu.name}</div><div class="market-item-desc">${pu.desc}</div>`;
+
+    const actions = document.createElement('div');
+    actions.className = 'market-item-actions';
+
+    const cnt = document.createElement('span');
+    cnt.className = 'market-count';
+    cnt.textContent = `x${market.count(pu.id)}`;
+
+    const buyBtn = document.createElement('button');
+    buyBtn.className = 'market-buy-btn';
+    buyBtn.textContent = `${pu.price} 🪙`;
+    buyBtn.disabled = economy.coins < pu.price;
+    buyBtn.addEventListener('click', () => {
+      const r = market.buy(pu.id, economy);
+      if (r.type === 'noCoins') { showToast('Need more 🪙!'); return; }
+      updateCoinDisplays();
+      renderMarketPage();
+      showToast(`Got ${pu.name}!`);
+    });
+
+    const useBtn = document.createElement('button');
+    useBtn.className = 'market-use-btn';
+    useBtn.textContent = 'USE';
+    useBtn.disabled = market.count(pu.id) === 0 || !game;
+    useBtn.addEventListener('click', () => {
+      if (!game) { showToast('Start a game first!'); return; }
+      game.activatePowerup(pu.id);
+      showPage('play');
+    });
+
+    actions.append(cnt, buyBtn, useBtn);
+    item.append(icon, info, actions);
+    marketGrid.appendChild(item);
+  }
 }
 
 // ╔══════════════════════════════════════════════════════════════════════════╗
@@ -256,8 +316,20 @@ class Game {
   }
 
   _renderTray() {
-    for (let i = 0; i < TRAY_SIZE; i++) {
+    // Ensure enough preview canvases exist (extra_block may grow tray beyond TRAY_SIZE)
+    const tray = document.getElementById('tray');
+    while (tray.children.length < this.tray.length) {
+      const idx = tray.children.length;
+      const el = document.createElement('canvas');
+      el.id = `block${idx}`; el.className = 'block-preview'; el.dataset.idx = idx;
+      const sz = tray.children[0]?.width ?? 64;
+      el.width = el.height = sz;
+      tray.appendChild(el);
+      this.renderer.rebindDrag();
+    }
+    for (let i = 0; i < this.tray.length; i++) {
       const el = document.getElementById(`block${i}`);
+      if (!el) continue;
       el.classList.remove('used', 'dragging');
       this.renderer.drawBlockPreview(el, this.tray[i]);
     }
@@ -372,5 +444,115 @@ class Game {
       padding: this.renderer.PADDING,
     };
     this._renderTray();
+  }
+
+  // ── Power-ups ──────────────────────────────────────────────────────────────
+
+  activatePowerup(id) {
+    if (!market.use(id)) { showToast('No power-up left!'); return; }
+    updateCoinDisplays();
+
+    if (id === 'color_bomb') {
+      // No targeting needed — find most frequent color and clear it
+      const counts = Array(9).fill(0);
+      for (let r = 0; r < Grid.SIZE; r++)
+        for (let c = 0; c < Grid.SIZE; c++) {
+          const cell = this.grid.get(r, c);
+          if (!cell.isEmpty) counts[cell.colorID]++;
+        }
+      const topColor = counts.reduce((best, cnt, idx) => cnt > counts[best] ? idx : best, 1);
+      const positions = [];
+      for (let r = 0; r < Grid.SIZE; r++)
+        for (let c = 0; c < Grid.SIZE; c++) {
+          const cell = this.grid.get(r, c);
+          if (!cell.isEmpty && cell.colorID === topColor) positions.push({ row: r, col: c });
+        }
+      this._executeClear(positions, 'Color Bomb! 🌈');
+      return;
+    }
+
+    if (id === 'extra_block') {
+      // Add one newly-generated block to the tray
+      import('./blocks.js').then(({ generateTray: gen }) => {
+        const extra = gen(this.grid, 1, false);
+        this.tray.push(extra[0]);
+        this.usedMask.push(false);
+        this._renderTray();
+        showToast('Extra block added! ➕');
+      });
+      return;
+    }
+
+    // Targeted power-ups: wait for user to tap a cell
+    this._pendingPowerup = id;
+    powerupHint.textContent = id === 'smash'
+      ? '💥 Tap a filled cell to smash it'
+      : id === 'blast_right'
+      ? '➡️ Tap a cell to blast right'
+      : '⬅️ Tap a cell to blast left';
+    powerupHint.classList.remove('hidden');
+    document.getElementById('game-container').classList.add('powerup-target');
+
+    const onTap = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const pt = e.touches ? e.touches[0] : e;
+      const { row, col } = this.renderer._screenToGrid(pt.clientX, pt.clientY);
+      if (row < 0) return; // tapped outside grid
+
+      powerupHint.classList.add('hidden');
+      document.getElementById('game-container').classList.remove('powerup-target');
+      document.getElementById('fx-canvas').removeEventListener('pointerdown', onTap);
+      document.getElementById('fx-canvas').removeEventListener('touchstart', onTap);
+
+      this._applyTargetedPowerup(this._pendingPowerup, row, col);
+      this._pendingPowerup = null;
+    };
+
+    const fxEl = document.getElementById('fx-canvas');
+    fxEl.addEventListener('pointerdown', onTap, { once: true });
+    fxEl.addEventListener('touchstart',  onTap, { once: true, passive: false });
+  }
+
+  _applyTargetedPowerup(id, row, col) {
+    if (id === 'smash') {
+      const cell = this.grid.get(row, col);
+      if (!cell || cell.isEmpty) { showToast('Pick a filled cell!'); return; }
+      this._executeClear([{ row, col }], 'Smashed! 💥');
+    } else if (id === 'blast_right') {
+      const positions = [];
+      for (let c = col; c < Grid.SIZE; c++) {
+        if (!this.grid.get(row, c).isEmpty) positions.push({ row, col: c });
+      }
+      if (!positions.length) { showToast('Nothing to blast!'); return; }
+      this._executeClear(positions, 'Right Blast! ➡️');
+    } else if (id === 'blast_left') {
+      const positions = [];
+      for (let c = col; c >= 0; c--) {
+        if (!this.grid.get(row, c).isEmpty) positions.push({ row, col: c });
+      }
+      if (!positions.length) { showToast('Nothing to blast!'); return; }
+      this._executeClear(positions, 'Left Blast! ⬅️');
+    }
+  }
+
+  _executeClear(positions, label) {
+    if (!positions.length) return;
+    const snap = {};
+    for (const { row, col } of positions) {
+      const cell = this.grid.get(row, col);
+      if (!cell.isEmpty) snap[`${row},${col}`] = cell.colorID;
+    }
+    this.grid.clearMany(positions);
+    this.particles.burstCells(positions, PALETTE, snap);
+    const { delta } = this.scoreSystem.record({
+      deletedBlocks: positions.length,
+      clearedRows: [], clearedCols: [], colorClusters: [],
+      now: performance.now(),
+    });
+    this.particles.spawnScoreFloat(positions, delta, label, PALETTE, snap);
+    showToast(label);
+    playCluster();
+    updateCoinDisplays();
   }
 }

@@ -7,7 +7,7 @@
 
 import { Grid } from './grid.js';
 
-const CLUSTER_MIN = 6; // minimum connected same-color cells to pop
+const CLUSTER_MIN = 5; // minimum connected same-color cells to pop (8×8 grid)
 
 /**
  * After placing a block at `placedPositions`, run all clearing logic.

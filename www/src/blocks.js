@@ -115,7 +115,7 @@ function weightedChoice(options) {
  * @returns {Object}  shapeKey → weight multiplier
  */
 function analyseGrid(grid) {
-  const SIZE = 10;
+  const SIZE = 8;
   const bias = {};
 
   // Count 2×2 empty squares — favours SQ and L/J shapes
@@ -127,7 +127,7 @@ function analyseGrid(grid) {
         grid.isEmpty(r+1,c) && grid.isEmpty(r+1,c+1)
       ) sq2Count++;
 
-  if (sq2Count > 4) {
+  if (sq2Count > 2) {
     bias.SQ  = 2.0;
     bias.L4  = 1.5;
     bias.J4  = 1.5;
@@ -144,7 +144,7 @@ function analyseGrid(grid) {
       if (run >= 4) hStrip++;
     }
   }
-  if (hStrip > 3)  { bias.H4 = 1.8; bias.H3 = 1.6; bias.H5 = 1.4; }
+  if (hStrip > 2)  { bias.H4 = 1.8; bias.H3 = 1.6; bias.H5 = 1.4; }
 
   // Count long vertical strips
   let vStrip = 0;
@@ -155,7 +155,7 @@ function analyseGrid(grid) {
       if (run >= 4) vStrip++;
     }
   }
-  if (vStrip > 3)  { bias.V4 = 1.8; bias.V3 = 1.6; bias.V5 = 1.4; }
+  if (vStrip > 2)  { bias.V4 = 1.8; bias.V3 = 1.6; bias.V5 = 1.4; }
 
   return bias;
 }
@@ -175,8 +175,8 @@ function pickColor(grid, handColors) {
   // Find dominant colour on grid that is close to a 6-cluster
   let bonusColor = 0;
   for (let cid = 1; cid <= COLOR_COUNT; cid++) {
-    // Quick 2-BFS scan: any cluster of 4 or 5?
-    const SIZE = 10;
+    // Quick 2-BFS scan: any cluster of 3 or 4?
+    const SIZE = 8;
     const visited = new Set();
     for (let r = 0; r < SIZE; r++) {
       for (let c = 0; c < SIZE; c++) {
@@ -186,7 +186,7 @@ function pickColor(grid, handColors) {
         if (visited.has(k)) continue;
         const cluster = grid.getColorCluster(r, c);
         for (const p of cluster) visited.add(`${p.row},${p.col}`);
-        if (cluster.length >= 4 && cluster.length < 6) {
+        if (cluster.length >= 3 && cluster.length < 5) {
           bonusColor = cid;
         }
       }

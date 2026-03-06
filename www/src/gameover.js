@@ -2,7 +2,7 @@
  * gameover.js — Fast game-over detection using bitmask comparison.
  *
  * For each block shape in the tray, we check whether it fits anywhere
- * on the 10×10 grid by sliding its bitmask over the grid occupancy mask.
+ * on the 8×8 grid by sliding its bitmask over the grid occupancy mask.
  *
  * Time complexity: O(shapes × rows × cols) — all bitwise, very fast.
  */
