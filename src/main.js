@@ -165,6 +165,10 @@ function _refreshSettingsAuth(user) {
 }
 
 async function _handleSignIn() {
+  if (!navigator.onLine) {
+    showToast(t('noInternet'));
+    return;
+  }
   try {
     showToast(t('signingIn'));
     await googleSignIn();
