@@ -1,16 +1,263 @@
-/* ===== Reset & Base ===== */
+/* ═══ Reset ═══ */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-body {
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
   background: #0d0d1a;
   color: #e0e0ff;
   font-family: 'Segoe UI', system-ui, sans-serif;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  min-height: 100vh;
-  padding: 16px;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
+
+.hidden { display: none !important; }
+
+/* ═══ Start Screen ═══ */
+#start-screen {
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 36px;
+  background: radial-gradient(ellipse at 50% 40%, #1a1040 0%, #0d0d1a 70%);
+  z-index: 300;
+}
+
+#start-logo { text-align: center; }
+
+.logo-text {
+  font-size: clamp(2.8rem, 14vw, 5rem);
+  font-weight: 900;
+  letter-spacing: 8px;
+  background: linear-gradient(135deg, #a78bfa, #60a5fa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.logo-sub {
+  color: #7c7caa;
+  letter-spacing: 4px;
+  font-size: 0.85rem;
+  margin-top: 6px;
+}
+
+#start-stats { display: flex; gap: 20px; }
+
+.ss-box {
+  display: flex; flex-direction: column; align-items: center;
+  background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 12px;
+  padding: 10px 22px; min-width: 90px;
+}
+.ss-label { font-size: 0.6rem; letter-spacing: 2px; color: #7c7caa; margin-bottom: 2px; }
+.ss-box span:last-child { font-size: 1.4rem; font-weight: 700; color: #c4b5fd; }
+
+#start-btn {
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: #fff; border: none; border-radius: 16px;
+  padding: 16px 72px; font-size: 1.3rem; font-weight: 900;
+  letter-spacing: 4px; cursor: pointer;
+  box-shadow: 0 8px 32px #7c3aed55;
+  transition: transform 0.12s;
+}
+#start-btn:active { transform: scale(0.95); }
+
+/* ═══ Main App ═══ */
+#main-app {
+  position: fixed; inset: 0;
+  height: 100%;
+}
+
+/* ═══ Pages ═══ */
+.page {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  bottom: 56px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+
+/* ═══ Play Header ═══ */
+#play-header {
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-around;
+  padding: 6px 8px;
+  background: #0d0d1a;
+  border-bottom: 1px solid #1e1e36;
+  height: 50px;
+}
+
+.hbox { display: flex; flex-direction: column; align-items: center; }
+.hlabel { font-size: 0.52rem; letter-spacing: 2px; color: #7c7caa; }
+.hbox span:last-child { font-size: 0.95rem; font-weight: 700; color: #c4b5fd; line-height: 1.2; }
+
+#coin-hud {
+  display: flex; align-items: center; gap: 4px;
+  background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 20px;
+  padding: 4px 10px; font-size: 0.85rem; font-weight: 700; color: #fbbf24;
+}
+.coin-icon { font-size: 0.95rem; line-height: 1; }
+
+/* ═══ Game Area ═══ */
+#game-area {
+  flex: 1; min-height: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 6px;
+}
+
+#game-container {
+  position: relative;
+  border-radius: 10px;
+  box-shadow: 0 0 30px #a78bfa1a;
+  overflow: hidden;
+  flex-shrink: 0;
+  line-height: 0;
+}
+
+#grid-canvas, #fx-canvas { display: block; }
+
+#fx-canvas {
+  position: absolute; top: 0; left: 0;
+  pointer-events: none;
+}
+
+/* ═══ Tray ═══ */
+#tray {
+  flex-shrink: 0;
+  display: flex; justify-content: center; align-items: center;
+  gap: 8px; padding: 8px 8px;
+  background: #0d0d1a;
+  border-top: 1px solid #1e1e36;
+}
+
+.block-preview {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  cursor: grab;
+  flex-shrink: 0;
+  touch-action: none;
+  display: block;
+}
+.block-preview.dragging { opacity: 0.35; transform: scale(0.9); }
+.block-preview.used { opacity: 0.15; pointer-events: none; }
+
+/* ═══ Skins Page ═══ */
+#skins-header {
+  flex-shrink: 0; padding: 12px 16px;
+  display: flex; align-items: center; justify-content: space-between;
+  border-bottom: 1px solid #1e1e36; height: 50px;
+}
+#skins-header h2 { font-size: 1.1rem; letter-spacing: 4px; color: #a78bfa; }
+#skins-coin-row { display: flex; align-items: center; gap: 5px; color: #fbbf24; font-weight: 700; font-size: 1rem; }
+
+#buy-random-btn {
+  flex-shrink: 0;
+  margin: 10px 14px 6px;
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: #fff; border: none; border-radius: 12px;
+  padding: 11px; font-size: 0.88rem; font-weight: 700;
+  cursor: pointer; letter-spacing: 1px;
+  transition: opacity 0.15s;
+}
+#buy-random-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+#buy-random-btn:active:not(:disabled) { opacity: 0.75; }
+
+#skins-grid {
+  flex: 1; overflow-y: auto;
+  display: grid; grid-template-columns: repeat(2, 1fr);
+  gap: 10px; padding: 8px 14px 16px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.skin-card {
+  background: #1a1a2e; border: 2px solid #2a2a4a; border-radius: 14px;
+  padding: 10px; display: flex; flex-direction: column; align-items: center;
+  gap: 6px; cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s;
+  position: relative;
+}
+.skin-card.active-card { border-color: #a78bfa; }
+.skin-card.locked { cursor: default; opacity: 0.65; }
+.skin-card:active:not(.locked) { transform: scale(0.96); }
+
+.skin-preview-canvas { border-radius: 6px; display: block; }
+.skin-name { font-size: 0.8rem; font-weight: 700; color: #e0e0ff; letter-spacing: 1px; }
+.skin-desc { font-size: 0.62rem; color: #7c7caa; text-align: center; }
+
+.skin-badge {
+  position: absolute; top: 6px; right: 6px;
+  font-size: 0.55rem; font-weight: 700; letter-spacing: 1px;
+  padding: 2px 6px; border-radius: 6px;
+}
+.skin-badge.owned  { background: #14532d; color: #4ade80; }
+.skin-badge.activeb{ background: #4c1d95; color: #c4b5fd; }
+.skin-badge.price  { background: #1e1800; color: #fbbf24; }
+
+/* ═══ Bottom Nav ═══ */
+#bottom-nav {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  height: 56px; display: flex;
+  background: #0d0d1a;
+  border-top: 1px solid #1e1e36;
+  z-index: 50;
+}
+.nav-btn {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 1px;
+  background: none; border: none; color: #7c7caa;
+  cursor: pointer; transition: color 0.15s;
+  font-size: 0.55rem; letter-spacing: 1px; font-weight: 700;
+}
+.nav-btn.active { color: #a78bfa; }
+.nav-icon { font-size: 1.25rem; line-height: 1; }
+
+/* ═══ Toast ═══ */
+#feedback-toast {
+  position: fixed; top: 38%; left: 50%;
+  transform: translate(-50%, -50%) scale(0);
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: #fff; font-size: 1.2rem; font-weight: 900;
+  letter-spacing: 3px; padding: 12px 26px; border-radius: 14px;
+  pointer-events: none; opacity: 0; z-index: 150;
+  transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1), opacity 0.4s;
+  white-space: nowrap; max-width: 90vw;
+  text-align: center;
+}
+#feedback-toast.show { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+
+/* ═══ Game Over ═══ */
+#gameover-overlay {
+  position: fixed; inset: 0;
+  background: rgba(13,13,26,0.88);
+  backdrop-filter: blur(8px);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 200;
+}
+#gameover-box {
+  background: #1a1a2e; border: 1px solid #a78bfa44;
+  border-radius: 20px; padding: 32px 44px; text-align: center;
+  box-shadow: 0 0 60px #a78bfa33;
+  display: flex; flex-direction: column; gap: 16px;
+  min-width: 240px;
+}
+#gameover-box h2 { font-size: 1.8rem; letter-spacing: 5px; color: #a78bfa; }
+.go-stats { display: flex; gap: 20px; justify-content: center; }
+.go-stat { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.go-label { font-size: 0.55rem; letter-spacing: 2px; color: #7c7caa; }
+.go-stat strong { font-size: 1.3rem; color: #c4b5fd; }
+#final-coins { color: #fbbf24 !important; }
+
+#restart-btn {
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: #fff; border: none; border-radius: 10px;
+  padding: 12px 32px; font-size: 0.95rem; font-weight: 700;
+  letter-spacing: 2px; cursor: pointer; transition: transform 0.12s;
+}
+#restart-btn:active { transform: scale(0.95); }
+
 
 /* ===== App Layout ===== */
 #app {

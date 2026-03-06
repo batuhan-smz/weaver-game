@@ -2,51 +2,96 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Weaver — Block Puzzle</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>Weaver</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div id="app">
-    <header>
-      <h1>WEAVER</h1>
-      <div id="score-panel">
-        <div class="score-box">
-          <span class="label">SCORE</span>
-          <span id="score-display">0</span>
-        </div>
-        <div class="score-box">
-          <span class="label">BEST</span>
-          <span id="best-display">0</span>
-        </div>
-        <div class="score-box">
-          <span class="label">COMBO</span>
-          <span id="combo-display">x1</span>
-        </div>
-      </div>
-    </header>
 
-    <main>
-      <div id="game-container">
-        <canvas id="grid-canvas" width="460" height="460"></canvas>
-        <canvas id="fx-canvas"   width="460" height="460"></canvas>
+  <!-- ══════════ START SCREEN ══════════ -->
+  <div id="start-screen">
+    <div id="start-logo">
+      <div class="logo-text">WEAVER</div>
+      <div class="logo-sub">Block Puzzle</div>
+    </div>
+    <div id="start-stats">
+      <div class="ss-box">
+        <span class="ss-label">BEST</span>
+        <span id="ss-best">0</span>
+      </div>
+      <div class="ss-box">
+        <span class="ss-label">🪙 COINS</span>
+        <span id="ss-coins">0</span>
+      </div>
+    </div>
+    <button id="start-btn">PLAY</button>
+  </div>
+
+  <!-- ══════════ MAIN APP ══════════ -->
+  <div id="main-app" class="hidden">
+
+    <!-- ── PAGE: PLAY ── -->
+    <div id="page-play" class="page">
+      <div id="play-header">
+        <div class="hbox"><span class="hlabel">SCORE</span><span id="score-display">0</span></div>
+        <div id="coin-hud"><span class="coin-icon">🪙</span><span id="coin-display">0</span></div>
+        <div class="hbox"><span class="hlabel">BEST</span><span id="best-display">0</span></div>
+        <div class="hbox"><span class="hlabel">COMBO</span><span id="combo-display">x1</span></div>
+      </div>
+      <div id="game-area">
+        <div id="game-container">
+          <canvas id="grid-canvas"></canvas>
+          <canvas id="fx-canvas"></canvas>
+        </div>
       </div>
       <div id="tray">
-        <canvas id="block0" class="block-preview" width="120" height="120"></canvas>
-        <canvas id="block1" class="block-preview" width="120" height="120"></canvas>
-        <canvas id="block2" class="block-preview" width="120" height="120"></canvas>
-        <canvas id="block3" class="block-preview" width="120" height="120"></canvas>
+        <canvas id="block0" class="block-preview" data-idx="0"></canvas>
+        <canvas id="block1" class="block-preview" data-idx="1"></canvas>
+        <canvas id="block2" class="block-preview" data-idx="2"></canvas>
+        <canvas id="block3" class="block-preview" data-idx="3"></canvas>
       </div>
-    </main>
+    </div>
 
-    <div id="feedback-toast"></div>
-
-    <div id="gameover-overlay" class="hidden">
-      <div id="gameover-box">
-        <h2>GAME OVER</h2>
-        <p>Score: <strong id="final-score">0</strong></p>
-        <button id="restart-btn">Play Again</button>
+    <!-- ── PAGE: SKINS ── -->
+    <div id="page-skins" class="page hidden">
+      <div id="skins-header">
+        <h2>SKINS</h2>
+        <div id="skins-coin-row">
+          <span class="coin-icon">🪙</span>
+          <span id="skins-coin-display">0</span>
+        </div>
       </div>
+      <button id="buy-random-btn">🎲 Buy Random Skin — 100 🪙</button>
+      <div id="skins-grid"></div>
+    </div>
+
+    <!-- ── BOTTOM NAV ── -->
+    <nav id="bottom-nav">
+      <button class="nav-btn active" data-page="play">
+        <span class="nav-icon">🎮</span>
+        <span class="nav-label">PLAY</span>
+      </button>
+      <button class="nav-btn" data-page="skins">
+        <span class="nav-icon">🎨</span>
+        <span class="nav-label">SKINS</span>
+      </button>
+    </nav>
+
+  </div>
+
+  <!-- ══════════ OVERLAYS ══════════ -->
+  <div id="feedback-toast"></div>
+
+  <div id="gameover-overlay" class="hidden">
+    <div id="gameover-box">
+      <h2>GAME OVER</h2>
+      <div class="go-stats">
+        <div class="go-stat"><span class="go-label">SCORE</span><strong id="final-score">0</strong></div>
+        <div class="go-stat"><span class="go-label">COINS EARNED</span><strong id="final-coins">+0 🪙</strong></div>
+      </div>
+      <button id="restart-btn">Play Again</button>
     </div>
   </div>
 

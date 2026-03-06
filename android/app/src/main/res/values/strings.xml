@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Weaver</string>
+    <string name="title_activity_main">Weaver</string>
+    <string name="package_name">com.batuhan.weavergame</string>
+    <string name="custom_url_scheme">com.batuhan.weavergame</string>
+</resources>
