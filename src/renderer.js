@@ -98,9 +98,12 @@ export class Renderer {
     const x = this._cellX(col), y = this._cellY(row);
     const sz = this.CELL, cr = this.RADIUS;
     const tw = this.tweens.get(`${row},${col}`);
-    // Overwrite cell + 1px border with gap colour to erase any skin bleed
+    // Erase cell + 1px border so gap colour is always clean
     ctx.fillStyle = GRID_LINE;
     ctx.fillRect(x - 1, y - 1, sz + 2, sz + 2);
+    // Clip to exact cell bounds — prevents skin shadow/stroke from bleeding onto neighbours
+    ctx.save();
+    ctx.beginPath(); ctx.rect(x, y, sz, sz); ctx.clip();
     if (cell.isEmpty) {
       ctx.fillStyle = EMPTY_COLOR;
       _rr(ctx, x, y, sz, sz, cr); ctx.fill();
@@ -109,15 +112,14 @@ export class Renderer {
       const hex = PALETTE[cell.colorID]?.hex ?? '#888';
       const p   = tw ? tw.progress : 1;
       const sc  = p < 1 ? 0.76 + 0.24 * easeOutElastic(p) : 1;
-      ctx.save();
       if (sc !== 1) {
         const cx = x+sz/2, cy = y+sz/2;
         ctx.translate(cx,cy); ctx.scale(sc,sc); ctx.translate(-cx,-cy);
       }
       ctx.globalAlpha = p < 0.08 ? p/0.08 : 1;
       this.skin.drawCell(ctx, x, y, sz, hex, cr);
-      ctx.restore();
     }
+    ctx.restore();
   }
 
   tickTweens(dt) {
@@ -207,7 +209,11 @@ export class Renderer {
       requestAnimationFrame(() => {
         _rafPending = false;
         if (!this.dragging || !_lastPt) return;
-        const raw = this._screenToGrid(_lastPt.x, _lastPt.y);
+        // Offset so finger aligns to the bottom-centre of the block
+        const bb = this.dragging.block.getBoundingBox();
+        const yOff = bb.rows * (this.CELL + this.GAP);
+        const xOff = Math.floor(bb.cols / 2) * (this.CELL + this.GAP);
+        const raw = this._screenToGrid(_lastPt.x - xOff, _lastPt.y - yOff);
         if (raw.row < 0) {
           // Finger outside grid — hide ghost
           this.drawGhostAndHover(null, -1, -1, false);
