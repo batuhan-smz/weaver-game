@@ -20,10 +20,15 @@
 const BONUS_COINS = 200;
 
 const FIREBASE_VER = '10.14.1';
-const CDN = `https://www.gstatic.com/firebasejs/${FIREBASE_VER}`;
+// Use local copies bundled with the app (CDN fails in Capacitor WebView)
+const CDN = './flib';
 
 // Detect Capacitor native environment
-const IS_NATIVE = !!(window.Capacitor?.isNativePlatform?.());
+const IS_NATIVE = typeof window !== 'undefined' &&
+  typeof window.Capacitor !== 'undefined' &&
+  (typeof window.Capacitor.isNativePlatform === 'function'
+    ? window.Capacitor.isNativePlatform()
+    : !!window.Capacitor.isNative);
 
 // Lazy-loaded Firebase modules
 let _s = null;
@@ -63,7 +68,10 @@ export async function googleSignIn() {
   if (IS_NATIVE) {
     // Native Capacitor plugin registered on the bridge — no JS import needed
     const GoogleAuth = window.Capacitor?.Plugins?.GoogleAuth;
-    if (!GoogleAuth) throw new Error('GoogleAuth plugin not found on Capacitor bridge');
+    if (!GoogleAuth) {
+      const pluginKeys = Object.keys(window.Capacitor?.Plugins ?? {}).join(',');
+      throw new Error('GoogleAuth plugin not found. Available: ' + pluginKeys);
+    }
     const googleUser = await GoogleAuth.signIn();
     const credential = s.GoogleAuthProvider.credential(
       googleUser.authentication.idToken,

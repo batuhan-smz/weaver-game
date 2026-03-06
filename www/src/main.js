@@ -60,18 +60,15 @@ const powerupHint  = document.getElementById('powerup-hint');
 
 // Apply i18n to static labels
 function applyTranslations() {
-  document.getElementById('ss-best').closest('.ss-box')?.querySelector('.ss-label')?.setAttributeNS(null, 'data-i18n', 'best');
-  document.querySelectorAll('[data-i18n]').forEach(el => {
-    el.textContent = t(el.dataset.i18n);
-  });
-  document.getElementById('start-btn').textContent         = t('play');
-  document.getElementById('ss-signin-label').textContent   = t('signIn');
-  document.getElementById('ss-bonus-badge').textContent    = t('bonusBadge');
+  const set = (id, key) => { const el = document.getElementById(id); if (el) el.textContent = t(key); };
+  set('start-btn',          'play');
+  set('ss-signin-label',    'signIn');
+  set('ss-bonus-badge',     'bonusBadge');
+  set('restart-btn',        'playAgain');
+  set('settings-lang-title','language');
   const navLabels = document.querySelectorAll('.nav-label');
   const navKeys   = ['market', 'menu', 'skins'];
   navLabels.forEach((el, i) => { if (navKeys[i]) el.textContent = t(navKeys[i]); });
-  document.getElementById('restart-btn').textContent = t('playAgain');
-  document.getElementById('settings-lang-title').textContent = t('language');
 }
 applyTranslations();
 
@@ -173,7 +170,9 @@ async function _handleSignIn() {
     await googleSignIn();
     // onAuthStateChanged fires automatically after native sign-in
   } catch (err) {
-    showToast(t('signInFailed') + ': ' + (err.code ?? err.message ?? 'error'));
+    const msg = err?.message ?? err?.code ?? String(err) ?? 'unknown';
+    showToast('HATA: ' + msg.substring(0, 80));
+    console.error('googleSignIn failed:', err);
   }
 }
 
