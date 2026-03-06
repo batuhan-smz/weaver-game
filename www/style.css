@@ -27,6 +27,11 @@ html, body {
 
 #start-logo { text-align: center; }
 
+.logo-icon {
+  display: flex; justify-content: center; margin-bottom: 10px;
+}
+.logo-icon svg { filter: drop-shadow(0 4px 16px #a78bfa55); }
+
 .logo-text {
   font-size: clamp(2.8rem, 14vw, 5rem);
   font-weight: 900;
@@ -213,6 +218,9 @@ html, body {
 }
 .nav-btn.active { color: #a78bfa; }
 .nav-icon { font-size: 1.25rem; line-height: 1; }
+
+/* Center menu button — slightly larger icon */
+.nav-btn--menu .nav-icon { font-size: 1.5rem; }
 
 /* ═══ Toast ═══ */
 #feedback-toast {

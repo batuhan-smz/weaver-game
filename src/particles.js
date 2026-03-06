@@ -14,10 +14,13 @@ const CELL    = 44;
 const GAP     = 2;
 const PADDING = 6;
 
-function cellCenter(row, col) {
+function cellCenter(row, col, metrics) {
+  const cell    = metrics?.cell    ?? CELL;
+  const gap     = metrics?.gap     ?? GAP;
+  const padding = metrics?.padding ?? PADDING;
   return {
-    x: PADDING + col * (CELL + GAP) + CELL / 2,
-    y: PADDING + row * (CELL + GAP) + CELL / 2,
+    x: padding + col * (cell + gap) + cell / 2,
+    y: padding + row * (cell + gap) + cell / 2,
   };
 }
 
@@ -110,20 +113,21 @@ export class ParticleSystem {
   constructor() {
     /** @type {(Particle|ScoreFloat)[]} */
     this._particles = [];
+    /** Set by Game after renderer is sized: { cell, gap, padding } */
+    this.cellMetrics = null;
   }
 
   /**
    * Spawn burst particles for every cleared cell.
    * @param {{ row:number, col:number }[]} cells
    * @param {Object} palette  colorID → {hex}
-   * @param {import('./grid.js').Grid} grid    snapshot BEFORE clearing
    * @param {Object} colorSnapshot  "row,col" → colorID (captured before clear)
    */
   burstCells(cells, palette, colorSnapshot) {
     for (const { row, col } of cells) {
       const colorID = colorSnapshot[`${row},${col}`];
       const hex     = palette[colorID]?.hex ?? '#a78bfa';
-      const { x, y } = cellCenter(row, col);
+      const { x, y } = cellCenter(row, col, this.cellMetrics);
       const count   = 6 + Math.floor(Math.random() * 5);
       for (let i = 0; i < count; i++) {
         this._particles.push(new Particle(x, y, hex));
@@ -136,8 +140,8 @@ export class ParticleSystem {
    */
   spawnScoreFloat(cells, delta, label, palette, colorSnapshot) {
     if (cells.length === 0) return;
-    const cx = cells.reduce((s, p) => s + cellCenter(p.row, p.col).x, 0) / cells.length;
-    const cy = cells.reduce((s, p) => s + cellCenter(p.row, p.col).y, 0) / cells.length;
+    const cx = cells.reduce((s, p) => s + cellCenter(p.row, p.col, this.cellMetrics).x, 0) / cells.length;
+    const cy = cells.reduce((s, p) => s + cellCenter(p.row, p.col, this.cellMetrics).y, 0) / cells.length;
 
     const text  = label ? label : `+${delta}`;
     const color = label ? '#a78bfa' : '#60a5fa';

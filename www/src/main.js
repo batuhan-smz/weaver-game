@@ -11,6 +11,7 @@ import { ScoreSystem }       from './score.js';
 import { ParticleSystem }    from './particles.js';
 import { isGameOver }        from './gameover.js';
 import { SKINS, EconomyStore } from './skins.js';
+import { playPlace, playClear, playCluster, playMega } from './sounds.js';
 
 const TRAY_SIZE  = 4;
 const HARD_EVERY = 5;
@@ -64,6 +65,15 @@ function showPage(name) {
 document.querySelectorAll('.nav-btn').forEach(btn =>
   btn.addEventListener('click', () => showPage(btn.dataset.page))
 );
+
+// ── Menu button (center nav) ──────────────────────────────────────────────────
+
+document.getElementById('nav-menu-btn').addEventListener('click', () => {
+  mainApp.classList.add('hidden');
+  startScreen.classList.remove('hidden');
+  document.getElementById('ss-best').textContent  = Number(localStorage.getItem('weaverBest') ?? 0).toLocaleString();
+  document.getElementById('ss-coins').textContent = economy.coins;
+});
 
 // ── Start button ─────────────────────────────────────────────────────────────
 
@@ -185,6 +195,12 @@ class Game {
 
     this.renderer = new Renderer(this.grid, gridCanvas, fxCanvas);
     this.renderer.setSkin(economy.getActiveSkin());
+    // Give particles the correct cell dimensions after renderer is sized
+    this.particles.cellMetrics = {
+      cell:    this.renderer.CELL,
+      gap:     this.renderer.GAP,
+      padding: this.renderer.PADDING,
+    };
 
     this.tray       = [];
     this.usedMask   = [];
@@ -271,6 +287,7 @@ class Game {
     this.grid.fillMany(positions, block.colorID, block.id);
     for (const { row: r, col: c } of positions) snap[`${r},${c}`] = block.colorID;
     this.placements++;
+    playPlace();
 
     const idx = this.tray.findIndex(b => b?.id === block.id);
     if (idx !== -1) this._markUsed(idx);
@@ -287,6 +304,11 @@ class Game {
       });
       this.particles.spawnScoreFloat(result.cleared, delta, label, PALETTE, snap);
       if (label) showToast(label);
+      // pick sound based on how impressive the clear is
+      const hasMega = result.clearedRows.length > 0 && result.clearedCols.length > 0 && result.colorClusters.length > 0;
+      if (hasMega)                             playMega();
+      else if (result.colorClusters.length)    playCluster();
+      else                                     playClear();
     }
 
     if (this.tray.filter(Boolean).length > 0 && isGameOver(this.tray.filter(Boolean), this.grid))
@@ -299,8 +321,10 @@ class Game {
     const now = performance.now();
     const dt  = Math.min((now - last) / 1000, 0.05);
     this.renderer.tickTweens(dt);
+    // Always clear fxCtx each frame: removes ghost after drag ends,
+    // and gives particles a clean canvas to draw on.
+    this.renderer.fxCtx.clearRect(0, 0, this.renderer.fxCanvas.width, this.renderer.fxCanvas.height);
     if (this.particles.hasParticles) {
-      this.renderer.fxCtx.clearRect(0, 0, this.renderer.fxCanvas.width, this.renderer.fxCanvas.height);
       this.particles.tick(dt, this.renderer.fxCtx);
     }
     requestAnimationFrame(t => this._loop(t));
@@ -342,6 +366,11 @@ class Game {
       el.width = el.height = prevSz;
     });
     this.renderer.resize();
+    this.particles.cellMetrics = {
+      cell:    this.renderer.CELL,
+      gap:     this.renderer.GAP,
+      padding: this.renderer.PADDING,
+    };
     this._renderTray();
   }
 }

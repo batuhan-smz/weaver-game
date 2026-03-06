@@ -117,10 +117,11 @@ export class Renderer {
 
   tickTweens(dt) {
     for (const [key, tw] of this.tweens) {
-      if (tw.progress >= 1) continue;
-      tw.progress = Math.min(tw.progress + dt/320, 1);
+      if (tw.progress >= 1) { this.tweens.delete(key); continue; }
+      tw.progress = Math.min(tw.progress + dt / 0.32, 1);
       const [r,c] = key.split(',').map(Number);
       this._drawCell(r, c);
+      if (tw.progress >= 1) this.tweens.delete(key);
     }
   }
 
@@ -160,13 +161,22 @@ export class Renderer {
   }
 
   _bindDrag() {
+    let _rafPending = false;
+    let _lastPt = null;
     const onMove = (e) => {
       if (!this.dragging) return;
       e.preventDefault();
       const pt = e.touches ? e.touches[0] : e;
-      const {row,col} = this._screenToGrid(pt.clientX, pt.clientY);
-      const canPlace = row>=0 ? this.grid.canPlace(this.dragging.block.getAbsolutePositions(row,col)) : false;
-      this.drawGhostAndHover(this.dragging.block, row, col, canPlace);
+      _lastPt = { x: pt.clientX, y: pt.clientY };
+      if (_rafPending) return;
+      _rafPending = true;
+      requestAnimationFrame(() => {
+        _rafPending = false;
+        if (!this.dragging || !_lastPt) return;
+        const {row,col} = this._screenToGrid(_lastPt.x, _lastPt.y);
+        const canPlace = row>=0 ? this.grid.canPlace(this.dragging.block.getAbsolutePositions(row,col)) : false;
+        this.drawGhostAndHover(this.dragging.block, row, col, canPlace);
+      });
     };
     const onUp = (e) => {
       if (!this.dragging) return;
@@ -174,7 +184,8 @@ export class Renderer {
       const {row,col} = this._screenToGrid(pt.clientX, pt.clientY);
       if (row>=0 && this.onDrop) this.onDrop(this.dragging.block, this.dragging.el, row, col);
       this.dragging.el.classList.remove('dragging');
-      this.dragging = null; this.clearFx();
+      this.dragging = null; _lastPt = null; _rafPending = false;
+      // fxCtx cleared by the game loop next frame — don't wipe live particles here
     };
     document.querySelectorAll('.block-preview').forEach((el,idx) => {
       const start = (e) => {
