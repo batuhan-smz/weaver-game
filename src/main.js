@@ -14,9 +14,10 @@ import { SKINS, EconomyStore } from './skins.js';
 import { POWERUPS, MarketStore } from './market.js';
 import { playPlace, playClear, playCluster, playMega, setSfxVolume, getSfxVolume } from './sounds.js';
 import {
-  googleSignIn, googleSignOut, onAuthChange, checkRedirectResult,
+  googleSignIn, googleSignOut, onAuthChange,
   loadCloudSave, saveCloudSave, applyBonusIfNeeded,
 } from './firebase.js';
+import { t, setLang, getLang, AVAILABLE_LANGS } from './i18n.js';
 
 const TRAY_SIZE  = 4;
 const HARD_EVERY = 5;
@@ -56,6 +57,23 @@ const buyRandomBtn = document.getElementById('buy-random-btn');
 const skinsGrid    = document.getElementById('skins-grid');
 const marketGrid   = document.getElementById('market-grid');
 const powerupHint  = document.getElementById('powerup-hint');
+
+// Apply i18n to static labels
+function applyTranslations() {
+  document.getElementById('ss-best').closest('.ss-box')?.querySelector('.ss-label')?.setAttributeNS(null, 'data-i18n', 'best');
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.getElementById('start-btn').textContent         = t('play');
+  document.getElementById('ss-signin-label').textContent   = t('signIn');
+  document.getElementById('ss-bonus-badge').textContent    = t('bonusBadge');
+  const navLabels = document.querySelectorAll('.nav-label');
+  const navKeys   = ['market', 'menu', 'skins'];
+  navLabels.forEach((el, i) => { if (navKeys[i]) el.textContent = t(navKeys[i]); });
+  document.getElementById('restart-btn').textContent = t('playAgain');
+  document.getElementById('settings-lang-title').textContent = t('language');
+}
+applyTranslations();
 
 // Update start screen
 document.getElementById('ss-best').textContent  = Number(localStorage.getItem('weaverBest') ?? 0).toLocaleString();
@@ -151,11 +169,11 @@ function _refreshSettingsAuth(user) {
 
 async function _handleSignIn() {
   try {
-    showToast('Google\'a yönlendiriliyor...');
+    showToast(t('signingIn'));
     await googleSignIn();
-    // Page will redirect; onAuthStateChanged fires when it returns
+    // onAuthStateChanged fires automatically after native sign-in
   } catch (err) {
-    showToast('Giriş başarısız: ' + (err.code ?? err.message ?? 'hata'));
+    showToast(t('signInFailed') + ': ' + (err.code ?? err.message ?? 'error'));
   }
 }
 
@@ -168,6 +186,14 @@ document.getElementById('ss-signin-btn').addEventListener('click', _handleSignIn
 
 // Sign-out on start screen profile
 document.getElementById('ss-signout-btn').addEventListener('click', _handleSignOut);
+
+// Settings button on start screen
+document.getElementById('ss-settings-btn').addEventListener('click', () => {
+  mainApp.classList.remove('hidden');
+  startScreen.classList.add('hidden');
+  if (!game) game = new Game();
+  showPage('settings');
+});
 
 // Auth state listener
 onAuthChange(async user => {
@@ -196,7 +222,7 @@ onAuthChange(async user => {
       if (bonus > 0) {
         economy.addCoins(bonus);
         updateCoinDisplays();
-        showToast(`🎉 +${bonus} 🪙 Hoş Geldin!`);
+        showToast(t('welcome'));
       }
       // Save current state to cloud
       saveCloudSave(user.uid, {
@@ -211,9 +237,6 @@ onAuthChange(async user => {
   }
 });
 
-// Process any pending redirect sign-in (must run on every page load)
-checkRedirectResult().catch(() => {});
-
 // ── Settings page ─────────────────────────────────────────────────────────────
 
 function renderSettingsPage() {
@@ -221,13 +244,30 @@ function renderSettingsPage() {
   const slider = document.getElementById('sfx-volume-slider');
   const label  = document.getElementById('sfx-volume-val');
   const v = Math.round(getSfxVolume() * 100);
-  slider.value    = v;
+  slider.value      = v;
   label.textContent = `${v}%`;
   slider.oninput = () => {
     const pct = Number(slider.value);
     label.textContent = `${pct}%`;
     setSfxVolume(pct / 100);
   };
+
+  // Language grid
+  const langGrid = document.getElementById('settings-lang-grid');
+  if (langGrid) {
+    langGrid.innerHTML = '';
+    for (const lang of AVAILABLE_LANGS) {
+      const btn = document.createElement('button');
+      btn.className = 'lang-btn' + (getLang() === lang.code ? ' lang-btn--active' : '');
+      btn.textContent = lang.label;
+      btn.addEventListener('click', () => {
+        setLang(lang.code);
+        applyTranslations();
+        renderSettingsPage();
+      });
+      langGrid.appendChild(btn);
+    }
+  }
 
   // Settings sign-in/sign-out buttons
   const siBtn = document.getElementById('settings-signin-btn');
@@ -242,10 +282,10 @@ function renderSettingsPage() {
 
 buyRandomBtn.addEventListener('click', () => {
   const result = economy.buyRandom();
-  if (result.type === 'noCoins')    showToast('Need 100 \uD83E\uDE99!');
-  else if (result.type === 'allOwned') showToast('All skins owned!');
+  if (result.type === 'noCoins')       showToast(t('needCoins'));
+  else if (result.type === 'allOwned') showToast(t('allOwned'));
   else {
-    showToast(`Got: ${result.skin.name}!`);
+    showToast(`${t('got')} ${result.skin.name}!`);
     updateCoinDisplays();
     renderSkinsPage();
     if (game) { game.renderer.setSkin(result.skin); game._renderTray(); }
@@ -349,10 +389,10 @@ function renderMarketPage() {
     buyBtn.disabled = economy.coins < pu.price;
     buyBtn.addEventListener('click', () => {
       const r = market.buy(pu.id, economy);
-      if (r.type === 'noCoins') { showToast('Need more 🪙!'); return; }
+      if (r.type === 'noCoins') { showToast(t('needMoreCoins')); return; }
       updateCoinDisplays();
       renderMarketPage();
-      showToast(`Got ${pu.name}!`);
+      showToast(`${t('got')} ${pu.name}!`);
     });
 
     const useBtn = document.createElement('button');
@@ -360,7 +400,7 @@ function renderMarketPage() {
     useBtn.textContent = 'USE';
     useBtn.disabled = market.count(pu.id) === 0 || !game;
     useBtn.addEventListener('click', () => {
-      if (!game) { showToast('Start a game first!'); return; }
+      if (!game) { showToast(t('noGame')); return; }
       game.activatePowerup(pu.id);
       showPage('play');
     });

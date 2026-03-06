@@ -4,10 +4,16 @@
  * Config lives in ./firebase-config.js (gitignored).
  * See firebase-config.example.js for the template.
  *
+ * Authentication strategy:
+ *  - On Android Capacitor: uses @codetrix-studio/capacitor-google-auth (native)
+ *  - On web/browser: uses Firebase signInWithPopup
+ *
  * Firebase Console setup:
  *  1. Authentication → Sign-in method → Enable "Google"
  *  2. Authentication → Authorized domains → add "localhost"
  *  3. Firestore Database → Create (test mode)
+ *  4. Get your Web Client ID from Google Cloud Console → APIs & Services → Credentials
+ *     and set "serverClientId" in capacitor.config.json
  */
 
 // All new sign-ins receive a one-time welcome bonus
@@ -16,16 +22,18 @@ const BONUS_COINS = 200;
 const FIREBASE_VER = '10.14.1';
 const CDN = `https://www.gstatic.com/firebasejs/${FIREBASE_VER}`;
 
+// Detect Capacitor native environment
+const IS_NATIVE = !!(window.Capacitor?.isNativePlatform?.());
+
 // Lazy-loaded Firebase modules
 let _s = null;
 
 async function _init() {
   if (_s) return _s;
-  // Config loaded at runtime from gitignored file (never in source control)
   const { FIREBASE_CONFIG } = await import('./firebase-config.js');
   const [
     { initializeApp },
-    { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged },
+    { getAuth, GoogleAuthProvider, signInWithPopup, signInWithCredential, signOut, onAuthStateChanged },
     { getFirestore, doc, getDoc, setDoc, serverTimestamp },
   ] = await Promise.all([
     import(`${CDN}/firebase-app.js`),
@@ -37,47 +45,47 @@ async function _init() {
   const db   = getFirestore(app);
   _s = {
     auth, db,
-    GoogleAuthProvider, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged,
+    GoogleAuthProvider, signInWithPopup, signInWithCredential, signOut, onAuthStateChanged,
     doc, getDoc, setDoc, serverTimestamp,
   };
   return _s;
 }
 
 /**
- * Initiate Google redirect sign-in.
- * The result is picked up by onAuthStateChanged after the redirect completes.
- * (signInWithPopup is not supported in Android WebView.)
+ * Sign in with Google.
+ * On native Android: uses Capacitor native plugin (no WebView restriction).
+ * On web: uses Firebase popup.
+ * Returns the Firebase UserCredential.
  */
 export async function googleSignIn() {
-  try {
-    const s = await _init();
+  const s = await _init();
+
+  if (IS_NATIVE) {
+    // Use native Capacitor Google Auth plugin
+    const { GoogleAuth } = await import('/node_modules/@codetrix-studio/capacitor-google-auth/dist/esm/index.js');
+    await GoogleAuth.initialize();
+    const googleUser = await GoogleAuth.signIn();
+    const credential = s.GoogleAuthProvider.credential(
+      googleUser.authentication.idToken,
+    );
+    return s.signInWithCredential(s.auth, credential);
+  } else {
+    // Web fallback: popup
     const provider = new s.GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
-    await s.signInWithRedirect(s.auth, provider);
-  } catch (err) {
-    console.error('googleSignIn error:', err);
-    throw err;
-  }
-}
-
-/**
- * Call once on every page load to complete any pending redirect sign-in.
- * On success, onAuthStateChanged fires automatically with the new user.
- */
-export async function checkRedirectResult() {
-  try {
-    const s = await _init();
-    const result = await s.getRedirectResult(s.auth);
-    return result; // null if no pending redirect
-  } catch (err) {
-    console.warn('checkRedirectResult:', err.code ?? err.message);
-    return null;
+    return s.signInWithPopup(s.auth, provider);
   }
 }
 
 /** Sign out current user. */
 export async function googleSignOut() {
   if (!_s) return;
+  if (IS_NATIVE) {
+    try {
+      const { GoogleAuth } = await import('/node_modules/@codetrix-studio/capacitor-google-auth/dist/esm/index.js');
+      await GoogleAuth.signOut();
+    } catch (_) {}
+  }
   return _s.signOut(_s.auth);
 }
 
@@ -103,8 +111,6 @@ export async function loadCloudSave(uid) {
 
 /**
  * Write current game progress to Firestore (merge).
- * @param {string} uid
- * @param {{ coins: number, unlockedIds: string[], activeSkinId: string, bestScore: number }} data
  */
 export async function saveCloudSave(uid, data) {
   const s = await _init();

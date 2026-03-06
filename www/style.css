@@ -341,6 +341,7 @@ html, body {
 
 /* ═══ Start Screen — Google login ═══ */
 #ss-signin-btn {
+  position: relative;
   display: flex; align-items: center; justify-content: center; gap: 10px;
   background: #fff;
   color: #3c4043; font-size: 0.9rem; font-weight: 700;
@@ -368,19 +369,37 @@ html, body {
 }
 #ss-signout-btn:active { color: #ef4444; }
 
-/* ─── Bonus badge above sign-in button ─── */
-.signin-bonus-badge {
-  display: inline-flex; align-items: center; gap: 6px;
-  background: linear-gradient(135deg, #78350f55, #b4530922);
-  border: 1px solid #b45309aa;
-  color: #fde68a;
-  font-size: 0.78rem; letter-spacing: 0.5px;
-  padding: 6px 16px; border-radius: 20px;
+/* ─── Bonus badge overlay on sign-in button ─── */
+.btn-bonus-badge {
+  position: absolute; top: -9px; right: -9px;
+  background: linear-gradient(135deg, #f59e0b, #f97316);
+  color: #fff; font-size: 0.58rem; font-weight: 900;
+  padding: 3px 8px; border-radius: 10px;
+  white-space: nowrap; letter-spacing: 0.3px;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.35);
+  pointer-events: none;
 }
-.signin-bonus-badge strong { color: #fbbf24; }
+
+/* ─── Settings button on start screen (top-right) ─── */
+#ss-settings-btn {
+  position: absolute; top: 14px; right: 16px;
+  background: rgba(255,255,255,0.07); border: 1px solid #2a2a4a;
+  color: #c4b5fd; font-size: 1.3rem;
+  width: 40px; height: 40px; border-radius: 50%;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s;
+  z-index: 5;
+}
+#ss-settings-btn:active { background: rgba(167,139,250,0.2); }
+
+/* ─── Bonus badge in settings (text only) ─── */
 .signin-bonus-badge--settings {
   display: flex; margin: 0 14px 8px;
-  border-radius: 10px;
+  align-items: center; gap: 6px;
+  background: linear-gradient(135deg, #78350f55, #b4530922);
+  border: 1px solid #b45309aa;
+  color: #fde68a; font-size: 0.78rem;
+  padding: 6px 16px; border-radius: 10px;
 }
 
 
@@ -438,6 +457,23 @@ html, body {
 .settings-btn--google { background: #fff; color: #3c4043; }
 .settings-btn--danger  { background: #3b1b1b; color: #f87171; }
 .settings-btn:active { opacity: 0.75; }
+
+/* Language selector grid */
+.settings-lang-grid {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  padding: 10px 14px 14px;
+}
+.lang-btn {
+  background: #13132a; border: 1px solid #2a2a4a;
+  color: #9090c0; font-size: 0.78rem; font-weight: 600;
+  padding: 5px 12px; border-radius: 20px;
+  cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.lang-btn:active { opacity: 0.75; }
+.lang-btn--active {
+  background: #4c1d95; border-color: #a78bfa;
+  color: #e9d5ff;
+}
 
 .settings-profile-row {
   display: flex; align-items: center; gap: 12px;
