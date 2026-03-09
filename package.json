@@ -16,6 +16,7 @@
   "author": "batuhan-smz",
   "license": "MIT",
   "dependencies": {
+    "@capacitor-community/admob": "^8.0.0",
     "@capacitor/android": "^7.0.0",
     "@capacitor/core": "^7.0.0",
     "@codetrix-studio/capacitor-google-auth": "^3.4.0-rc.4"

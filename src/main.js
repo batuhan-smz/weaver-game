@@ -3,7 +3,7 @@
  */
 
 import { Grid }                        from './grid.js';
-import { generateTray, COLORS as PALETTE } from './blocks.js';
+import { generateTray, Block, COLORS as PALETTE } from './blocks.js';
 import { Renderer }          from './renderer.js';
 import { runClearingLogic }  from './clearing.js';
 import { ScoreSystem }       from './score.js';
@@ -17,6 +17,7 @@ import {
   loadCloudSave, saveCloudSave, applyBonusIfNeeded,
 } from './firebase.js';
 import { t, setLang, getLang, AVAILABLE_LANGS } from './i18n.js';
+import { initAds, showRewardedAd } from './ads.js';
 
 const TRAY_SIZE      = 4;
 const HARD_EVERY     = 5;
@@ -88,12 +89,13 @@ function applyTranslations() {
   set('ss-bonus-badge',     'bonusBadge');
   set('restart-btn',        'playAgain');
   set('settings-lang-title','language');
-  document.querySelectorAll('.nav-label').forEach((el, i) => {
-    const key = ['market', 'menu', 'skins'][i];
+  document.querySelectorAll('.nav-label').forEach(el => {
+    const key = el.dataset.i18n;
     if (key) el.textContent = t(key);
   });
 }
 applyTranslations();
+initAds(); // Reklam sistemini başlat — native cihazda ilk reklamı arka planda yükler
 
 function _updateStartScreen() {
   _el('ss-best').textContent  = Number(localStorage.getItem('weaverBest') ?? 0).toLocaleString();
@@ -104,20 +106,59 @@ _updateStartScreen();
 // ── Navigation ───────────────────────────────────────────────────────────────
 
 const PAGES = { play: pagePlay, skins: pageSkins, market: pageMarket, settings: pageSettings };
+const PAGE_ORDER = ['play', 'market', 'skins', 'settings'];
+let _currentPage = 'market';
 
 function showPage(name) {
-  Object.entries(PAGES).forEach(([k, el]) => el.classList.toggle('hidden', k !== name));
-  document.querySelectorAll('.nav-btn').forEach(b =>
-    b.classList.toggle('active', b.dataset.page === name)
-  );
+  if (name === _currentPage) return;
+
+  const fromEl = PAGES[_currentPage];
+  const toEl   = PAGES[name];
+  const fromIdx = PAGE_ORDER.indexOf(_currentPage);
+  const toIdx   = PAGE_ORDER.indexOf(name);
+  const goRight = toIdx > fromIdx;
+
+  // Render content before showing
   if (name === 'skins')    renderSkinsPage();
   if (name === 'market')   renderMarketPage();
   if (name === 'settings') renderSettingsPage();
+
+  // Settings animasyonunu durdur çıkarken
+  if (_currentPage === 'settings' && _settingsBgRaf) {
+    cancelAnimationFrame(_settingsBgRaf);
+    _settingsBgRaf = null;
+  }
+
+  // Animate out the current page
+  if (fromEl && !fromEl.classList.contains('hidden')) {
+    fromEl.classList.add(goRight ? 'page--exit-left' : 'page--exit-right');
+    fromEl.addEventListener('animationend', () => {
+      fromEl.classList.add('hidden');
+      fromEl.classList.remove('page--exit-left', 'page--exit-right');
+    }, { once: true });
+  }
+
+  // Animate in the new page
+  toEl.classList.remove('hidden');
+  toEl.classList.remove('page--enter-right', 'page--enter-left');
+  void toEl.offsetWidth; // force reflow
+  toEl.classList.add(goRight ? 'page--enter-right' : 'page--enter-left');
+  toEl.addEventListener('animationend', () => {
+    toEl.classList.remove('page--enter-right', 'page--enter-left');
+  }, { once: true });
+
+  document.querySelectorAll('.nav-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.page === name)
+  );
+  _currentPage = name;
 }
 
-document.querySelectorAll('.nav-btn').forEach(btn =>
-  btn.addEventListener('click', () => showPage(btn.dataset.page))
-);
+document.querySelectorAll('.nav-btn[data-page]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (btn.dataset.page === 'play' && !game) game = new Game();
+    showPage(btn.dataset.page);
+  });
+});
 
 // ── Menu button ───────────────────────────────────────────────────────────────
 
@@ -176,35 +217,31 @@ function _updateAdBtn() {
   }
 }
 
-_el('ss-watch-ad-btn').addEventListener('click', () => {
-  if (_el('ss-watch-ad-btn').disabled) return;
-  const btn   = _el('ss-watch-ad-btn');
-  const label = btn.querySelector('.earn-label');
-  const orig  = label.textContent;
+_el('ss-watch-ad-btn')?.addEventListener('click', async () => {
+  const btn = _el('ss-watch-ad-btn');
+  if (btn.disabled) return;
   btn.disabled = true;
   btn.classList.add('watching');
-  let secs = 5;
-  label.textContent = `${secs}s...`;
-  const iv = setInterval(() => {
-    secs--;
-    if (secs > 0) { label.textContent = `${secs}s...`; return; }
-    clearInterval(iv);
-    btn.classList.remove('watching');
-    label.textContent = orig;
+
+  const earned = await showRewardedAd();
+
+  btn.classList.remove('watching');
+  if (earned) {
     _lastAdTime = Date.now();
     economy.addCoins(50);
     updateCoinDisplays();
     _updateStartScreen();
     showToast('+50 \uD83E\uDE99 Reklam \u00f6d\u00fcl\u00fc!');
-    // Start countdown ticker visible on button
     _adCooldownInterval = setInterval(_updateAdBtn, 1000);
     _updateAdBtn();
-  }, 1000);
+  } else {
+    btn.disabled = false; // reklam yoksa/iptal edildiyse tekrar aç
+  }
 });
 
 // ── Buy Coins button → open market page ──────────────────────────────────────
 
-_el('ss-buy-coins-btn').addEventListener('click', () => {
+_el('ss-buy-coins-btn')?.addEventListener('click', () => {
   _setVisible(startScreen, false);
   _setVisible(mainApp, true);
   if (!game) game = new Game();
@@ -378,6 +415,84 @@ function renderSettingsPage() {
   }
 
   _applyAuthUI(_currentUser);
+  _startSettingsBgAnimation();
+}
+
+// ── Settings background floating-blocks animation ─────────────────────────────
+let _settingsBgRaf = null;
+
+function _startSettingsBgAnimation() {
+  const canvas = _el('settings-bg-canvas');
+  if (!canvas) return;
+  if (_settingsBgRaf) return; // already running
+
+  const W = canvas.offsetWidth  || 360;
+  const H = canvas.offsetHeight || 700;
+  canvas.width  = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  const COLORS = ['#a78bfa','#60a5fa','#34d399','#f59e0b','#f472b6','#818cf8'];
+  const SHAPES = [
+    [[0,0],[0,1],[1,0],[1,1]],           // 2x2
+    [[0,0],[0,1],[0,2]],                  // I-3
+    [[0,0],[1,0],[1,1],[2,1]],            // S
+    [[0,1],[1,0],[1,1],[2,0]],            // Z
+    [[0,0],[1,0],[2,0],[2,1]],            // L
+    [[0,0],[0,1],[1,1],[2,1]],            // J
+    [[0,0],[1,0],[1,1],[1,2]],            // T-ish
+  ];
+  const CS = 16, GAP = 2;
+  const count = 14;
+  const pieces = Array.from({ length: count }, () => {
+    const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+    const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+    const rows  = Math.max(...shape.map(c => c[0])) + 1;
+    const cols  = Math.max(...shape.map(c => c[1])) + 1;
+    return {
+      shape, color,
+      x: Math.random() * (W - cols * (CS + GAP)),
+      y: Math.random() * H,
+      vy: 0.3 + Math.random() * 0.5,
+      vx: (Math.random() - 0.5) * 0.3,
+      rot: Math.random() * Math.PI * 2,
+      vrot: (Math.random() - 0.5) * 0.008,
+      rows, cols,
+      alpha: 0.5 + Math.random() * 0.5,
+    };
+  });
+
+  const tick = () => {
+    if (!_el('settings-bg-canvas')) { _settingsBgRaf = null; return; }
+    ctx.clearRect(0, 0, W, H);
+    for (const p of pieces) {
+      p.x   += p.vx;
+      p.y   += p.vy;
+      p.rot += p.vrot;
+      if (p.y > H + 60)  p.y = -60;
+      if (p.x < -60)     p.x = W + 20;
+      if (p.x > W + 60)  p.x = -20;
+
+      ctx.save();
+      ctx.globalAlpha = p.alpha;
+      const cx = p.x + p.cols * (CS + GAP) / 2;
+      const cy = p.y + p.rows * (CS + GAP) / 2;
+      ctx.translate(cx, cy);
+      ctx.rotate(p.rot);
+      ctx.translate(-cx, -cy);
+      ctx.fillStyle = p.color;
+      for (const [dr, dc] of p.shape) {
+        const rx = p.x + dc * (CS + GAP);
+        const ry = p.y + dr * (CS + GAP);
+        ctx.beginPath();
+        ctx.roundRect(rx, ry, CS, CS, 3);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+    _settingsBgRaf = requestAnimationFrame(tick);
+  };
+  _settingsBgRaf = requestAnimationFrame(tick);
 }
 
 
@@ -505,7 +620,9 @@ function _makeSkinPreview(skin) {
   cvs.className = 'skin-preview-canvas';
   const ctx = cvs.getContext('2d');
   ctx.fillStyle = '#13132a'; ctx.fillRect(0, 0, 84, 84);
-  const cs = 30, gap = 4, ox = 4, oy = 4;
+  const cs = 30, gap = 4;
+  const ox = Math.round((84 - 2 * cs - gap) / 2); // = 10, centered
+  const oy = Math.round((84 - 2 * cs - gap) / 2);
   for (let r = 0; r < 2; r++)
     for (let c = 0; c < 2; c++)
       skin.drawCell(ctx, ox + c * (cs + gap), oy + r * (cs + gap), cs, PREVIEW_COLORS[r * 2 + c], 4);
@@ -766,16 +883,8 @@ class Game {
   }
 
   _renderTray() {
-    const tray = _el('tray');
-    while (tray.children.length < this.tray.length) {
-      const idx = tray.children.length;
-      const el = document.createElement('canvas');
-      el.id = `block${idx}`; el.className = 'block-preview'; el.dataset.idx = idx;
-      const sz = tray.children[0]?.width ?? 64;
-      el.width = el.height = sz;
-      tray.appendChild(el);
-      this.renderer.rebindDrag();
-    }
+    const trayEl = _el('tray');
+
     for (let i = 0; i < this.tray.length; i++) {
       const el = _el(`block${i}`);
       if (!el) continue;
@@ -913,24 +1022,58 @@ class Game {
     }
 
     if (id === 'extra_block') {
-      // Add one newly-generated block to the tray
-      import('./blocks.js').then(({ generateTray: gen }) => {
-        const extra = gen(this.grid, 1, false);
-        this.tray.push(extra[0]);
-        this.usedMask.push(false);
-        this._renderTray();
-        showToast('Extra block added! ➕');
-      });
+      // Kullanıcı grid üzerine istediği kareye tek blok yerleştirir
+      const colorID = Math.ceil(Math.random() * 8);
+      this._pendingExtraBlock = new Block('DOT', colorID);
+      powerupHint.textContent = '➕ İstediğin kareye dokun — tekli blok yerleştir';
+      powerupHint.classList.remove('hidden');
+      _el('game-container').classList.add('powerup-target');
+
+      const onTap = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const pt = e.touches ? e.touches[0] : e;
+        const { row, col } = this.renderer._screenToGrid(pt.clientX, pt.clientY);
+
+        powerupHint.classList.add('hidden');
+        _el('game-container').classList.remove('powerup-target');
+        gcEl.removeEventListener('pointerdown', onTap);
+        gcEl.removeEventListener('touchstart',  onTap);
+
+        if (row < 0) {
+          market._inv[id] = (market._inv[id] ?? 0) + 1;
+          market._save();
+          this._pendingExtraBlock = null;
+          showToast('İptal edildi.');
+          return;
+        }
+        const pos = [{ row, col }];
+        if (!this.grid.canPlace(pos)) {
+          // Dolu kare — iade et
+          market._inv[id] = (market._inv[id] ?? 0) + 1;
+          market._save();
+          this._pendingExtraBlock = null;
+          showToast('Bu kare dolu, iptal edildi.');
+          return;
+        }
+        this.grid.fillMany(pos, this._pendingExtraBlock.colorID, this._pendingExtraBlock.id);
+        this._pendingExtraBlock = null;
+        showToast('Blok yerleştirildi! ➕');
+      };
+
+      const gcEl = _el('grid-canvas');
+      gcEl.addEventListener('pointerdown', onTap, { once: true });
+      gcEl.addEventListener('touchstart',  onTap, { once: true, passive: false });
       return;
     }
 
     // Targeted power-ups: wait for user to tap a cell
     this._pendingPowerup = id;
     powerupHint.textContent = id === 'smash'
-      ? '💥 Tap a filled cell to smash it'
+      ? '💥 Yok etmek istediğin hücreye dokun'
       : id === 'blast_right'
-      ? '➡️ Tap a cell to blast right'
-      : '⬅️ Tap a cell to blast left';
+      ? '➡️ Patlatmak istediğin satıra dokun'
+      : '⬅️ Patlatmak istediğin satıra dokun';
     powerupHint.classList.remove('hidden');
     _el('game-container').classList.add('powerup-target');
 
@@ -939,20 +1082,28 @@ class Game {
       e.stopPropagation();
       const pt = e.touches ? e.touches[0] : e;
       const { row, col } = this.renderer._screenToGrid(pt.clientX, pt.clientY);
-      if (row < 0) return;
 
       powerupHint.classList.add('hidden');
       _el('game-container').classList.remove('powerup-target');
-      _el('fx-canvas').removeEventListener('pointerdown', onTap);
-      _el('fx-canvas').removeEventListener('touchstart', onTap);
+      gcEl.removeEventListener('pointerdown', onTap);
+      gcEl.removeEventListener('touchstart',  onTap);
 
-      this._applyTargetedPowerup(this._pendingPowerup, row, col);
+      if (row < 0) {
+        // Grid dışına tıklandı — power-up iade et
+        market._inv[id] = (market._inv[id] ?? 0) + 1;
+        market._save();
+        showToast('İptal edildi.');
+        this._pendingPowerup = null;
+        return;
+      }
+      const pending = this._pendingPowerup;
       this._pendingPowerup = null;
+      this._applyTargetedPowerup(pending, row, col);
     };
 
-    const fxEl = _el('fx-canvas');
-    fxEl.addEventListener('pointerdown', onTap, { once: true });
-    fxEl.addEventListener('touchstart',  onTap, { once: true, passive: false });
+    const gcEl = _el('grid-canvas');
+    gcEl.addEventListener('pointerdown', onTap, { once: true });
+    gcEl.addEventListener('touchstart',  onTap, { once: true, passive: false });
   }
 
   _applyTargetedPowerup(id, row, col) {

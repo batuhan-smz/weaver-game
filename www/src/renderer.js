@@ -206,10 +206,35 @@ export class Renderer {
     return { row: Math.max(0, Math.min(Grid.SIZE - 1, rawRow)), col: Math.max(0, Math.min(Grid.SIZE - 1, rawCol)), canPlace: false };
   }
 
+  _updateGhostFromPoint(x, y) {
+    if (!this.dragging) return;
+    const bb   = this.dragging.block.getBoundingBox();
+    const step = this.CELL + this.GAP;
+
+    const rect   = this.gridCanvas.getBoundingClientRect();
+    const scaleX = this.gridCanvas.width  / rect.width;
+    const scaleY = this.gridCanvas.height / rect.height;
+
+    // Treat finger as if it were LIFT_PX screen-pixels higher, block centered on finger X.
+    // This keeps the ghost on the grid even when the finger is in the piece tray below.
+    const LIFT_PX = 100;
+    const canvasX = (x - rect.left) * scaleX;
+    const canvasY = (y - rect.top)  * scaleY - LIFT_PX * scaleY;
+    const rawRow  = Math.floor((canvasY - this.PADDING) / step);
+    const rawCol  = Math.floor((canvasX - this.PADDING) / step - bb.cols / 2);
+
+    // Always keep ghost visible — clamp to grid bounds, never hide
+    const clampedRow = Math.max(0, Math.min(Grid.SIZE - 1, rawRow));
+    const clampedCol = Math.max(0, Math.min(Grid.SIZE - 1, rawCol));
+
+    const snap = this._snapToNearest(this.dragging.block, clampedRow, clampedCol);
+    this._lastSnap = snap;
+    this.drawGhostAndHover(this.dragging.block, snap.row, snap.col, snap.canPlace);
+  }
+
   _bindDrag() {
     let _rafPending = false;
     let _lastPt = null;
-    let _lastSnap = null;
     const onMove = (e) => {
       if (!this.dragging) return;
       e.preventDefault();
@@ -220,52 +245,17 @@ export class Renderer {
       requestAnimationFrame(() => {
         _rafPending = false;
         if (!this.dragging || !_lastPt) return;
-
-        // Offset so the block appears above the finger (finger ≈ bottom-centre of block)
-        const bb   = this.dragging.block.getBoundingBox();
-        const step = this.CELL + this.GAP;
-        const yOff = bb.rows * step;
-        const xOff = Math.floor(bb.cols / 2) * step;
-
-        // Compute grid row/col from offset-adjusted finger position.
-        // We clamp manually rather than using _screenToGrid so the ghost stays
-        // visible when the offset pushes the anchor slightly above/left of the grid.
-        const rect   = this.gridCanvas.getBoundingClientRect();
-        const scaleX = this.gridCanvas.width  / rect.width;
-        const scaleY = this.gridCanvas.height / rect.height;
-        const adjX   = (_lastPt.x - xOff - rect.left) * scaleX;
-        const adjY   = (_lastPt.y - yOff - rect.top)  * scaleY;
-        const rawRow = Math.floor((adjY - this.PADDING) / step);
-        const rawCol = Math.floor((adjX - this.PADDING) / step);
-
-        // If the actual fingertip is clearly outside the grid area, hide ghost
-        const fingerY = _lastPt.y - rect.top;
-        const fingerX = _lastPt.x - rect.left;
-        if (fingerY > rect.height + 20 || fingerY < -20 ||
-            fingerX < -20             || fingerX > rect.width + 20) {
-          this.drawGhostAndHover(null, -1, -1, false);
-          _lastSnap = null;
-          return;
-        }
-
-        // Clamp to valid grid range so the ghost never disappears just
-        // because the offset moved the anchor slightly out of bounds
-        const clampedRow = Math.max(0, Math.min(Grid.SIZE - 1, rawRow));
-        const clampedCol = Math.max(0, Math.min(Grid.SIZE - 1, rawCol));
-
-        const snap = this._snapToNearest(this.dragging.block, clampedRow, clampedCol);
-        _lastSnap = snap;
-        this.drawGhostAndHover(this.dragging.block, snap.row, snap.col, snap.canPlace);
+        this._updateGhostFromPoint(_lastPt.x, _lastPt.y);
       });
     };
     const onUp = (e) => {
       if (!this.dragging) return;
-      const snapped = _lastSnap;
+      const snapped = this._lastSnap;
       if (snapped && snapped.canPlace && this.onDrop)
         this.onDrop(this.dragging.block, this.dragging.el, snapped.row, snapped.col);
       this.dragging.el.classList.remove('dragging');
       this._ghostState = null;
-      this.dragging = null; _lastPt = null; _lastSnap = null; _rafPending = false;
+      this.dragging = null; _lastPt = null; this._lastSnap = null; _rafPending = false;
     };
     document.querySelectorAll('.block-preview').forEach((el, idx) => {
       const start = this._makeStartHandler(el, idx);
@@ -285,6 +275,9 @@ export class Renderer {
       if (!block || el.classList.contains('used')) return;
       this.dragging = { block, el, idx };
       el.classList.add('dragging');
+      // Show ghost immediately at the initial touch/click position
+      const pt = e.touches ? e.touches[0] : e;
+      this._updateGhostFromPoint(pt.clientX, pt.clientY);
     };
   }
 

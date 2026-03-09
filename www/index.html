@@ -41,21 +41,18 @@
     <div id="ss-profile" class="hidden">
       <img id="ss-avatar" src="" alt="" referrerpolicy="no-referrer" crossorigin="anonymous" />
       <span id="ss-username"></span>
-      <button id="ss-signout-btn" type="button">✕</button>
+      <button id="ss-signout-btn">✕</button>
     </div>
 
     <button id="start-btn">PLAY</button>
     <button id="ss-settings-btn" aria-label="Settings">⚙️ AYARLAR</button>
     <div id="ss-earn-row">
-      <button id="ss-watch-ad-btn">
-        <span class="earn-icon">📺</span>
-        <span class="earn-label">Reklam İzle</span>
+      <button id="ss-watch-ad-btn" class="ss-earn-btn">
+        <span class="earn-label">📺 Reklam İzle</span>
         <span class="earn-reward">+50 🪙</span>
       </button>
-      <button id="ss-buy-coins-btn">
-        <span class="earn-icon">💳</span>
-        <span class="earn-label">Altın Satın Al</span>
-        <span class="earn-reward">Mağaza →</span>
+      <button id="ss-buy-coins-btn" class="ss-earn-btn ss-earn-btn--buy">
+        <span>🪙 Altın Al</span>
       </button>
     </div>
     <button id="ss-signin-btn">
@@ -85,7 +82,6 @@
         <div id="game-container">
           <canvas id="grid-canvas"></canvas>
           <canvas id="fx-canvas"></canvas>
-          <div id="float-layer"></div>
         </div>
       </div>
       <div id="tray">
@@ -119,17 +115,14 @@
         </div>
       </div>
       <div id="market-grid"></div>
-      <!-- Coin packs section -->
-      <div id="coin-packs-section">
-        <h3 id="coin-packs-title">🪙 ALTIN PAKETLERİ</h3>
-        <div id="coin-packs-grid"></div>
-      </div>
+      <div id="coin-packs-grid"></div>
       <!-- Active power-up bar (shown during game) -->
       <div id="powerup-bar" class="hidden"></div>
     </div>
 
     <!-- ── PAGE: SETTINGS ── -->
     <div id="page-settings" class="page hidden">
+      <canvas id="settings-bg-canvas"></canvas>
       <div id="settings-header">
         <h2>SETTINGS</h2>
       </div>
@@ -144,18 +137,6 @@
               <input type="range" id="sfx-volume-slider" min="0" max="100" step="1" value="70" />
               <span id="sfx-volume-val">70%</span>
             </div>
-          </div>
-        </div>
-
-        <!-- Visuals section -->
-        <div class="settings-section">
-          <div class="settings-section-title">✨ GÖRSELLER</div>
-          <div class="settings-row">
-            <span class="settings-label">Animasyonlar</span>
-            <label class="toggle-switch">
-              <input type="checkbox" id="anim-toggle" />
-              <span class="toggle-track"></span>
-            </label>
           </div>
         </div>
 
@@ -183,7 +164,7 @@
                 <span id="settings-email"></span>
               </div>
             </div>
-            <button id="settings-signout-btn" type="button" class="settings-btn settings-btn--danger">✕ Çıkış Yap</button>
+            <button id="settings-signout-btn" class="settings-btn settings-btn--danger">✕ Çıkış Yap</button>
           </div>
         </div>
 
@@ -194,23 +175,27 @@
         </div>
 
         <!-- Version -->
-        <div class="settings-version">Weaver v1.5.2</div>
+        <div class="settings-version">Weaver v1.6.0</div>
       </div>
     </div>
 
     <!-- ── BOTTOM NAV ── -->
     <nav id="bottom-nav">
-      <button class="nav-btn active" data-page="market">
+      <button class="nav-btn" data-page="market">
         <span class="nav-icon">🛒</span>
-        <span class="nav-label">MARKET</span>
+        <span class="nav-label" data-i18n="market">MARKET</span>
+      </button>
+      <button class="nav-btn nav-btn--play" data-page="play">
+        <span class="nav-icon">▶️</span>
+        <span class="nav-label" data-i18n="play">OYNA</span>
       </button>
       <button class="nav-btn nav-btn--menu" id="nav-menu-btn">
         <span class="nav-icon">⊞</span>
-        <span class="nav-label">MENU</span>
+        <span class="nav-label" data-i18n="menu">MENU</span>
       </button>
       <button class="nav-btn" data-page="skins">
         <span class="nav-icon">🎨</span>
-        <span class="nav-label">SKINS</span>
+        <span class="nav-label" data-i18n="skins">SKINS</span>
       </button>
     </nav>
 
@@ -219,23 +204,21 @@
   <!-- ══════════ OVERLAYS ══════════ -->
   <div id="feedback-toast"></div>
 
-  <!-- Power-up targeting hint -->
-  <div id="powerup-hint" class="hidden">Tap a cell on the grid</div>
-
-  <!-- Skin reveal animation overlay -->
+  <!-- Skin Reveal Overlay -->
   <div id="skin-reveal-overlay" class="hidden">
     <div id="skin-reveal-box">
-      <div id="skin-reveal-title">🎰</div>
-      <div id="skin-reveal-reel-wrap">
-        <canvas id="skin-reveal-reel" width="260" height="90"></canvas>
-      </div>
+      <div id="skin-reveal-title">🎰 Çark Dönüyor...</div>
+      <canvas id="skin-reveal-reel" width="260" height="90"></canvas>
       <div id="skin-reveal-result" class="hidden">
         <canvas id="skin-reveal-canvas" width="90" height="90"></canvas>
         <div id="skin-reveal-name"></div>
-        <button id="skin-reveal-close" type="button">✓ Harika!</button>
       </div>
+      <button id="skin-reveal-close">Kapat ✓</button>
     </div>
   </div>
+
+  <!-- Power-up targeting hint -->
+  <div id="powerup-hint" class="hidden">Tap a cell on the grid</div>
 
   <div id="gameover-overlay" class="hidden">
     <div id="gameover-box">

@@ -9,6 +9,15 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <!--
+          AdMob App ID — gerçek ID'yi AdMob Console'dan al ve buraya yaz:
+          https://admob.google.com → Uygulamalar → Uygulama Ayarları → Uygulama Kimliği
+          Şu an Google'ın test ID'si kullanılıyor.
+        -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-6143982813228060~4115428533"/>
+
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation"
             android:name=".MainActivity"

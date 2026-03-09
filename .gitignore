@@ -8,3 +8,7 @@ src/firebase-config.js
 www/src/firebase-config.js
 # Google Services JSON contains API keys — keep local only
 android/app/google-services.json
+
+# Keystore
+*.jks
+*.keystore
