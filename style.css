@@ -69,6 +69,15 @@ html, body {
 }
 #start-btn:active { transform: scale(0.95); }
 
+#ss-settings-btn {
+  background: linear-gradient(135deg, #2a2a3e, #1a1a2e);
+  color: #9090bb; border: 1px solid #3a3a5e; border-radius: 16px;
+  padding: 14px 72px; font-size: 0.95rem; font-weight: 700;
+  letter-spacing: 3px; cursor: pointer; width: 100%; max-width: 260px;
+  transition: transform 0.12s, background 0.2s;
+}
+#ss-settings-btn:active { transform: scale(0.95); }
+
 /* ═══ Main App ═══ */
 #main-app {
   position: fixed; inset: 0;
@@ -455,6 +464,45 @@ html, body {
   text-align: center; font-size: 0.62rem; color: #3a3a5a; letter-spacing: 2px; margin-top: 4px;
 }
 
+/* ═══ Score Float (DOM layer) ═══ */
+#float-layer {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.score-float {
+  position: absolute;
+  font-family: 'Segoe UI', sans-serif;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  animation: score-float-anim linear forwards;
+  will-change: transform, opacity;
+}
+@keyframes score-float-anim {
+  0%   { opacity: 1;   translate: 0 0; }
+  60%  { opacity: 1;   translate: 0 -54px; }
+  100% { opacity: 0;   translate: 0 -90px; }
+}
+
+.settings-lang-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 8px; margin: 4px 14px 0;
+}
+.lang-btn {
+  background: #1a1a2e; color: #9090bb;
+  border: 1px solid #2a2a4a; border-radius: 10px;
+  padding: 8px 4px; font-size: 0.75rem; font-weight: 600;
+  cursor: pointer; text-align: center;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.lang-btn--active {
+  background: linear-gradient(135deg, #7c3aed44, #2563eb44);
+  border-color: #7c3aed; color: #c4b5fd;
+}
+.lang-btn:active { opacity: 0.75; }
+
 
 #app {
   display: flex;
@@ -568,13 +616,26 @@ h1 {
   pointer-events: none;
   transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1), opacity 0.4s;
   opacity: 0;
-  z-index: 100;
+  z-index: 9999;
   white-space: nowrap;
+  max-width: 88vw;
 }
 
 #feedback-toast.show {
   transform: translate(-50%, -50%) scale(1);
   opacity: 1;
+}
+
+#feedback-toast.toast--error {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  text-align: left;
+  padding: 12px 16px;
+  line-height: 1.4;
+  background: linear-gradient(135deg, #7f1d1d, #991b1b);
 }
 
 /* ===== Game Over ===== */

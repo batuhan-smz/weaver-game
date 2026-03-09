@@ -2,9 +2,8 @@
  * main.js - Game orchestrator with start menu, economy, skins, and bottom nav.
  */
 
-import { Grid }              from './grid.js';
-import { generateTray }      from './blocks.js';
-import { COLORS as PALETTE } from './blocks.js';
+import { Grid }                        from './grid.js';
+import { generateTray, COLORS as PALETTE } from './blocks.js';
 import { Renderer }          from './renderer.js';
 import { runClearingLogic }  from './clearing.js';
 import { ScoreSystem }       from './score.js';
@@ -19,22 +18,31 @@ import {
 } from './firebase.js';
 import { t, setLang, getLang, AVAILABLE_LANGS } from './i18n.js';
 
-const TRAY_SIZE  = 4;
-const HARD_EVERY = 5;
+const TRAY_SIZE      = 4;
+const HARD_EVERY     = 5;
 const SCORE_PER_COIN = 1000;
 
-// ── Layout helpers ──────────────────────────────────────────────────────────
+// ── Layout ──────────────────────────────────────────────────────────────────
+
+const LAYOUT = { NAV: 56, HEADER: 50, TRAY: 86, PAD: 14 };
 
 function computeGridSize() {
-  const NAV = 56, HEADER = 50, TRAY = 86, PAD = 14;
+  const { NAV, HEADER, TRAY, PAD } = LAYOUT;
   const aw = window.innerWidth  - PAD * 2;
   const ah = window.innerHeight - NAV - HEADER - TRAY - PAD * 2;
   return Math.max(160, Math.floor(Math.min(aw, ah) / 10) * 10);
 }
 
 function computeTraySize(gridSize) {
-  const aw = Math.min(window.innerWidth - 24, gridSize);
-  return Math.max(52, Math.floor((aw - 8*3) / 4));
+  return Math.max(52, Math.floor((Math.min(window.innerWidth - 24, gridSize) - 8 * 3) / 4));
+}
+
+// ── DOM helpers ──────────────────────────────────────────────────────────────
+
+const _el = id => document.getElementById(id);
+
+function _setVisible(el, visible) {
+  el?.classList.toggle('hidden', !visible);
 }
 
 // ── Global state ────────────────────────────────────────────────────────────
@@ -43,46 +51,62 @@ const economy = new EconomyStore();
 const market  = new MarketStore();
 let game      = null;
 
+// ── Animation preference ──────────────────────────────────────────────────────
+const ANIM_KEY       = 'weaverAnimations';
+const _getAnimEnabled = () => localStorage.getItem(ANIM_KEY) !== 'false';
+const _setAnimEnabled = v  => localStorage.setItem(ANIM_KEY, String(v));
+
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 
-const startScreen  = document.getElementById('start-screen');
-const mainApp      = document.getElementById('main-app');
-const pagePlay     = document.getElementById('page-play');
-const pageSkins    = document.getElementById('page-skins');
-const pageMarket   = document.getElementById('page-market');
-const pageSettings = document.getElementById('page-settings');
-const overlayEl    = document.getElementById('gameover-overlay');
-const toastEl      = document.getElementById('feedback-toast');
-const buyRandomBtn = document.getElementById('buy-random-btn');
-const skinsGrid    = document.getElementById('skins-grid');
-const marketGrid   = document.getElementById('market-grid');
-const powerupHint  = document.getElementById('powerup-hint');
+const startScreen  = _el('start-screen');
+const mainApp      = _el('main-app');
+const pagePlay     = _el('page-play');
+const pageSkins    = _el('page-skins');
+const pageMarket   = _el('page-market');
+const pageSettings = _el('page-settings');
+const overlayEl    = _el('gameover-overlay');
+const toastEl      = _el('feedback-toast');
+const buyRandomBtn = _el('buy-random-btn');
+const skinsGrid    = _el('skins-grid');
+const marketGrid   = _el('market-grid');
+const powerupHint  = _el('powerup-hint');
+
+// Reveal overlay elements
+const _revealOverlay = _el('skin-reveal-overlay');
+const _reelCanvas    = _el('skin-reveal-reel');
+const _revealCanvas  = _el('skin-reveal-canvas');
+const _revealName    = _el('skin-reveal-name');
+const _revealTitle   = _el('skin-reveal-title');
+const _revealResult  = _el('skin-reveal-result');
+const _revealClose   = _el('skin-reveal-close');
 
 // Apply i18n to static labels
 function applyTranslations() {
-  const set = (id, key) => { const el = document.getElementById(id); if (el) el.textContent = t(key); };
+  const set = (id, key) => { const el = _el(id); if (el) el.textContent = t(key); };
   set('start-btn',          'play');
   set('ss-signin-label',    'signIn');
   set('ss-bonus-badge',     'bonusBadge');
   set('restart-btn',        'playAgain');
   set('settings-lang-title','language');
-  const navLabels = document.querySelectorAll('.nav-label');
-  const navKeys   = ['market', 'menu', 'skins'];
-  navLabels.forEach((el, i) => { if (navKeys[i]) el.textContent = t(navKeys[i]); });
+  document.querySelectorAll('.nav-label').forEach((el, i) => {
+    const key = ['market', 'menu', 'skins'][i];
+    if (key) el.textContent = t(key);
+  });
 }
 applyTranslations();
 
-// Update start screen
-document.getElementById('ss-best').textContent  = Number(localStorage.getItem('weaverBest') ?? 0).toLocaleString();
-document.getElementById('ss-coins').textContent = economy.coins;
+function _updateStartScreen() {
+  _el('ss-best').textContent  = Number(localStorage.getItem('weaverBest') ?? 0).toLocaleString();
+  _el('ss-coins').textContent = economy.coins;
+}
+_updateStartScreen();
 
 // ── Navigation ───────────────────────────────────────────────────────────────
 
+const PAGES = { play: pagePlay, skins: pageSkins, market: pageMarket, settings: pageSettings };
+
 function showPage(name) {
-  pagePlay.classList.toggle('hidden',     name !== 'play');
-  pageSkins.classList.toggle('hidden',    name !== 'skins');
-  pageMarket.classList.toggle('hidden',   name !== 'market');
-  pageSettings.classList.toggle('hidden', name !== 'settings');
+  Object.entries(PAGES).forEach(([k, el]) => el.classList.toggle('hidden', k !== name));
   document.querySelectorAll('.nav-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.page === name)
   );
@@ -95,108 +119,163 @@ document.querySelectorAll('.nav-btn').forEach(btn =>
   btn.addEventListener('click', () => showPage(btn.dataset.page))
 );
 
-// ── Menu button (center nav) ──────────────────────────────────────────────────
+// ── Menu button ───────────────────────────────────────────────────────────────
 
-document.getElementById('nav-menu-btn').addEventListener('click', () => {
-  mainApp.classList.add('hidden');
-  startScreen.classList.remove('hidden');
-  document.getElementById('ss-best').textContent  = Number(localStorage.getItem('weaverBest') ?? 0).toLocaleString();
-  document.getElementById('ss-coins').textContent = economy.coins;
+_el('nav-menu-btn').addEventListener('click', () => {
+  _setVisible(mainApp, false);
+  _setVisible(startScreen, true);
+  _updateStartScreen();
 });
 
-// ── Start button ─────────────────────────────────────────────────────────────
+// ── Start button ──────────────────────────────────────────────────────────────
 
-document.getElementById('start-btn').addEventListener('click', () => {
-  startScreen.classList.add('hidden');
-  mainApp.classList.remove('hidden');
+_el('start-btn').addEventListener('click', () => {
+  _setVisible(startScreen, false);
+  _setVisible(mainApp, true);
   if (!game) game = new Game();
   showPage('play');
 });
 
-// ── Restart ──────────────────────────────────────────────────────────────────
+// ── Settings button ───────────────────────────────────────────────────────────
 
-document.getElementById('restart-btn').addEventListener('click', () => {
+_el('ss-settings-btn').addEventListener('click', () => {
+  _setVisible(startScreen, false);
+  _setVisible(mainApp, true);
+  if (!game) game = new Game();
+  showPage('settings');
+});
+
+// ── Restart ───────────────────────────────────────────────────────────────────
+
+_el('restart-btn').addEventListener('click', () => {
   overlayEl.classList.add('hidden');
   game.restart();
   showPage('play');
+});
+
+// ── Watch Ad (simulated) ──────────────────────────────────────────────────────
+
+const AD_COOLDOWN_MS = 3 * 60 * 1000; // 3 minutes between ads
+let _lastAdTime = -Infinity;
+let _adCooldownInterval = null;
+
+function _updateAdBtn() {
+  const btn    = _el('ss-watch-ad-btn');
+  const reward = btn?.querySelector('.earn-reward');
+  if (!btn || !reward) return;
+  const remaining = Math.ceil((AD_COOLDOWN_MS - (Date.now() - _lastAdTime)) / 1000);
+  if (remaining > 0) {
+    btn.disabled = true;
+    const m = Math.floor(remaining / 60), s = remaining % 60;
+    reward.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+  } else {
+    btn.disabled = false;
+    reward.textContent = '+50 \uD83E\uDE99';
+    clearInterval(_adCooldownInterval);
+    _adCooldownInterval = null;
+  }
+}
+
+_el('ss-watch-ad-btn').addEventListener('click', () => {
+  if (_el('ss-watch-ad-btn').disabled) return;
+  const btn   = _el('ss-watch-ad-btn');
+  const label = btn.querySelector('.earn-label');
+  const orig  = label.textContent;
+  btn.disabled = true;
+  btn.classList.add('watching');
+  let secs = 5;
+  label.textContent = `${secs}s...`;
+  const iv = setInterval(() => {
+    secs--;
+    if (secs > 0) { label.textContent = `${secs}s...`; return; }
+    clearInterval(iv);
+    btn.classList.remove('watching');
+    label.textContent = orig;
+    _lastAdTime = Date.now();
+    economy.addCoins(50);
+    updateCoinDisplays();
+    _updateStartScreen();
+    showToast('+50 \uD83E\uDE99 Reklam \u00f6d\u00fcl\u00fc!');
+    // Start countdown ticker visible on button
+    _adCooldownInterval = setInterval(_updateAdBtn, 1000);
+    _updateAdBtn();
+  }, 1000);
+});
+
+// ── Buy Coins button → open market page ──────────────────────────────────────
+
+_el('ss-buy-coins-btn').addEventListener('click', () => {
+  _setVisible(startScreen, false);
+  _setVisible(mainApp, true);
+  if (!game) game = new Game();
+  showPage('market');
 });
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 let _currentUser = null;
 
-/** Sync UI elements that reflect sign-in state. */
-function _applyAuthUI(user) {
-  _currentUser = user;
-
-  // Start screen profile row
-  const ssProfile  = document.getElementById('ss-profile');
-  const ssAvatar   = document.getElementById('ss-avatar');
-  const ssUsername = document.getElementById('ss-username');
-  const ssSignin   = document.getElementById('ss-signin-btn');
-  if (user) {
-    ssAvatar.src     = user.photoURL || '';
-    ssUsername.textContent = user.displayName || user.email;
-    ssProfile.classList.remove('hidden');
-    ssSignin.classList.add('hidden');
-  } else {
-    ssProfile.classList.add('hidden');
-    ssSignin.classList.remove('hidden');
-  }
-
-  // Settings page (if currently shown)
-  _refreshSettingsAuth(user);
+// Strip size suffix from Google photo URLs and force =s96-c for consistent rendering
+function _avatarUrl(url) {
+  return url ? url.replace(/=s\d+(-c)?$/, '=s96-c') : '';
 }
 
-function _refreshSettingsAuth(user) {
-  const out = document.getElementById('settings-signed-out');
-  const ind = document.getElementById('settings-signed-in');
+/** Sync all UI elements that reflect sign-in state. */
+function _applyAuthUI(user) {
+  _currentUser = user;
+  const signedIn = !!user;
+
+  // Start screen
+  _setVisible(_el('ss-profile'),    signedIn);
+  _setVisible(_el('ss-signin-btn'), !signedIn);
+  if (signedIn) {
+    _el('ss-avatar').src              = _avatarUrl(user.photoURL);
+    _el('ss-username').textContent    = user.displayName || user.email;
+  }
+
+  // Settings panel
+  const out = _el('settings-signed-out');
+  const ind = _el('settings-signed-in');
   if (!out || !ind) return;
-  if (user) {
-    document.getElementById('settings-avatar').src = user.photoURL || '';
-    document.getElementById('settings-username').textContent = user.displayName || '';
-    document.getElementById('settings-email').textContent    = user.email || '';
-    out.classList.add('hidden');
-    ind.classList.remove('hidden');
-  } else {
-    out.classList.remove('hidden');
-    ind.classList.add('hidden');
+  _setVisible(out, !signedIn);
+  _setVisible(ind,  signedIn);
+  if (signedIn) {
+    _el('settings-avatar').src              = _avatarUrl(user.photoURL);
+    _el('settings-username').textContent    = user.displayName || '';
+    _el('settings-email').textContent       = user.email || '';
   }
 }
 
 async function _handleSignIn() {
-  if (!navigator.onLine) {
-    showToast(t('noInternet'));
-    return;
-  }
+  if (!navigator.onLine) { showToast(t('noInternet')); return; }
+  const btn      = _el('ss-signin-btn');
+  const label    = _el('ss-signin-label');
+  const origText = label?.textContent;
   try {
-    showToast(t('signingIn'));
+    if (btn)   btn.disabled    = true;
+    if (label) label.textContent = '...';
     await googleSignIn();
-    // onAuthStateChanged fires automatically after native sign-in
   } catch (err) {
     const msg = err?.message ?? err?.code ?? String(err) ?? 'unknown';
-    showToast('HATA: ' + msg.substring(0, 80));
-    console.error('googleSignIn failed:', err);
+    showToast('HATA:\n' + msg.substring(0, 200), { error: true });
+  } finally {
+    if (btn)   btn.disabled    = false;
+    if (label) label.textContent = origText;
   }
 }
 
-async function _handleSignOut() {
-  await googleSignOut();
+async function _handleSignOut(e) {
+  e?.preventDefault();
+  e?.stopPropagation();
+  try {
+    await googleSignOut();
+  } catch (err) {
+    // Ignore sign-out errors — UI will update via onAuthStateChanged
+  }
 }
 
-// Sign-in buttons (start screen + settings page)
-document.getElementById('ss-signin-btn').addEventListener('click', _handleSignIn);
-
-// Sign-out on start screen profile
-document.getElementById('ss-signout-btn').addEventListener('click', _handleSignOut);
-
-// Settings button on start screen
-document.getElementById('ss-settings-btn').addEventListener('click', () => {
-  mainApp.classList.remove('hidden');
-  startScreen.classList.add('hidden');
-  if (!game) game = new Game();
-  showPage('settings');
-});
+_el('ss-signin-btn').addEventListener('click', _handleSignIn);
+_el('ss-signout-btn').addEventListener('click', _handleSignOut);
 
 // Auth state listener
 onAuthChange(async user => {
@@ -220,32 +299,45 @@ onAuthChange(async user => {
         }
         updateCoinDisplays();
       }
-      // One-time welcome bonus
-      const bonus = await applyBonusIfNeeded(user.uid, user.email);
-      if (bonus > 0) {
-        economy.addCoins(bonus);
-        updateCoinDisplays();
-        showToast(t('welcome'));
+      // One-time welcome bonus — local flag prevents re-application on every sign-in
+      const bonusKey = `weaverBonus_${user.uid}`;
+      if (!localStorage.getItem(bonusKey)) {
+        const bonus = await applyBonusIfNeeded(user.uid, user.email);
+        if (bonus > 0) {
+          localStorage.setItem(bonusKey, '1');
+          economy.addCoins(bonus);
+          updateCoinDisplays();
+          showToast(t('welcome'));
+        } else {
+          // Firestore confirms bonus already given — cache locally
+          localStorage.setItem(bonusKey, '1');
+        }
       }
       // Save current state to cloud
-      saveCloudSave(user.uid, {
-        coins:        economy.coins,
-        unlockedIds:  [...economy.unlockedIds],
-        activeSkinId: economy.activeSkinId,
-        bestScore:    Number(localStorage.getItem('weaverBest') ?? 0),
-      }).catch(() => {});
+      saveCloudSave(user.uid, _cloudSavePayload()).catch(() => {});
     } catch (e) {
-      console.warn('Cloud sync error:', e);
+      // cloud sync error — silent in production
     }
   }
 });
+
+// ── Cloud save payload ────────────────────────────────────────────────────────
+
+function _cloudSavePayload() {
+  return {
+    coins:        economy.coins,
+    unlockedIds:  [...economy.unlockedIds],
+    activeSkinId: economy.activeSkinId,
+    bestScore:    Number(localStorage.getItem('weaverBest') ?? 0),
+  };
+}
 
 // ── Settings page ─────────────────────────────────────────────────────────────
 
 function renderSettingsPage() {
   // Volume slider
-  const slider = document.getElementById('sfx-volume-slider');
-  const label  = document.getElementById('sfx-volume-val');
+  const slider = _el('sfx-volume-slider');
+  const label  = _el('sfx-volume-val');
   const v = Math.round(getSfxVolume() * 100);
   slider.value      = v;
   label.textContent = `${v}%`;
@@ -256,7 +348,7 @@ function renderSettingsPage() {
   };
 
   // Language grid
-  const langGrid = document.getElementById('settings-lang-grid');
+  const langGrid = _el('settings-lang-grid');
   if (langGrid) {
     langGrid.innerHTML = '';
     for (const lang of AVAILABLE_LANGS) {
@@ -273,23 +365,131 @@ function renderSettingsPage() {
   }
 
   // Settings sign-in/sign-out buttons
-  const siBtn = document.getElementById('settings-signin-btn');
-  const soBtn = document.getElementById('settings-signout-btn');
+  const siBtn = _el('settings-signin-btn');
+  const soBtn = _el('settings-signout-btn');
   if (siBtn) siBtn.onclick = _handleSignIn;
   if (soBtn) soBtn.onclick = _handleSignOut;
 
-  _refreshSettingsAuth(_currentUser);
+  // Animation toggle
+  const animToggle = _el('anim-toggle');
+  if (animToggle) {
+    animToggle.checked  = _getAnimEnabled();
+    animToggle.onchange = () => _setAnimEnabled(animToggle.checked);
+  }
+
+  _applyAuthUI(_currentUser);
 }
 
 
 
-buyRandomBtn.addEventListener('click', () => {
+// ── Skin reveal slot-machine animation ───────────────────────────────────────
+
+const REVEAL_COLORS = ['#a78bfa', '#60a5fa', '#34d399', '#f59e0b', '#f472b6', '#fb923c'];
+
+function _animateBuyReveal(wonSkin) {
+  return new Promise(resolve => {
+    _setVisible(_revealOverlay, true);
+    _revealResult.classList.add('hidden');
+    _revealTitle.textContent = '🎰 Çark Dönüyor...';
+
+    const ctx = _reelCanvas.getContext('2d');
+    const W   = _reelCanvas.width;   // 260
+    const H   = _reelCanvas.height;  // 90
+    const sz  = H - 14;              // cell size ≈ 76
+
+    // Spin schedule: fast → medium → slow → stop
+    const FAST_STEPS = 18;   // 60ms each  → 1080ms
+    const MID_STEPS  = 8;    // 120ms each → 960ms
+    const SLOW_STEPS = 6;    // 155…330ms  → ~1350ms
+
+    const TOTAL = FAST_STEPS + MID_STEPS + SLOW_STEPS;
+
+    // Pre-build spin sequence; guarantee it ends on wonSkin
+    const seq = [];
+    for (let i = 0; i < TOTAL - 1; i++)
+      seq.push(SKINS[Math.floor(Math.random() * SKINS.length)]);
+    seq.push(wonSkin);
+
+    let step = 0;
+
+    function drawStep(i) {
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = '#0d0d1e';
+      ctx.fillRect(0, 0, W, H);
+
+      // Draw 3 cells: left (dim), center (bright), right (dim)
+      for (let off = -1; off <= 1; off++) {
+        const si   = Math.max(0, Math.min(seq.length - 1, i + off));
+        const skin = seq[si];
+        const cx   = W / 2 + off * (sz + 10) - sz / 2;
+        const cy   = (H - sz) / 2;
+        ctx.globalAlpha = off === 0 ? 1 : 0.3;
+        skin.drawCell(ctx, cx, cy, sz, REVEAL_COLORS[si % REVEAL_COLORS.length], 10);
+      }
+      ctx.globalAlpha = 1;
+
+      // Highlight box around center cell
+      const cx = W / 2 - sz / 2;
+      const cy = (H - sz) / 2;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(200,160,255,0.8)';
+      ctx.lineWidth   = 2.5;
+      ctx.shadowColor = '#a78bfa';
+      ctx.shadowBlur  = 10;
+      ctx.strokeRect(cx - 2, cy - 2, sz + 4, sz + 4);
+      ctx.restore();
+    }
+
+    function nextStep() {
+      drawStep(step);
+      step++;
+
+      if (step > TOTAL) {
+        // Spinning done — show the result panel
+        setTimeout(() => {
+          _revealTitle.textContent = '🎉 Yeni Skin!';
+          _revealResult.classList.remove('hidden');
+          const rc = _revealCanvas.getContext('2d');
+          rc.fillStyle = '#13132a';
+          rc.fillRect(0, 0, 90, 90);
+          wonSkin.drawCell(rc, 4, 4, 82, '#a78bfa', 12);
+          _revealName.textContent = wonSkin.name;
+        }, 150);
+        return;
+      }
+
+      let delay;
+      if (step <= FAST_STEPS) {
+        delay = 60;
+      } else if (step <= FAST_STEPS + MID_STEPS) {
+        delay = 120;
+      } else {
+        const p = step - FAST_STEPS - MID_STEPS; // 1..SLOW_STEPS
+        delay = 120 + p * 35;                     // 155, 190, 225, 260, 295, 330
+      }
+      setTimeout(nextStep, delay);
+    }
+
+    nextStep();
+
+    _revealClose.onclick = () => {
+      _setVisible(_revealOverlay, false);
+      resolve();
+    };
+  });
+}
+
+buyRandomBtn.addEventListener('click', async () => {
   const result = economy.buyRandom();
   if (result.type === 'noCoins')       showToast(t('needCoins'));
   else if (result.type === 'allOwned') showToast(t('allOwned'));
   else {
-    showToast(`${t('got')} ${result.skin.name}!`);
     updateCoinDisplays();
+    if (_getAnimEnabled()) {
+      await _animateBuyReveal(result.skin);
+    } else {
+      showToast(`${t('got')} ${result.skin.name}!`);
+    }
     renderSkinsPage();
     if (game) { game.renderer.setSkin(result.skin); game._renderTray(); }
   }
@@ -297,121 +497,170 @@ buyRandomBtn.addEventListener('click', () => {
 
 // ── Skins page ───────────────────────────────────────────────────────────────
 
+const PREVIEW_COLORS = ['#a78bfa', '#60a5fa', '#34d399', '#f59e0b'];
+
+function _makeSkinPreview(skin) {
+  const cvs = document.createElement('canvas');
+  cvs.width = 84; cvs.height = 84;
+  cvs.className = 'skin-preview-canvas';
+  const ctx = cvs.getContext('2d');
+  ctx.fillStyle = '#13132a'; ctx.fillRect(0, 0, 84, 84);
+  const cs = 30, gap = 4, ox = 4, oy = 4;
+  for (let r = 0; r < 2; r++)
+    for (let c = 0; c < 2; c++)
+      skin.drawCell(ctx, ox + c * (cs + gap), oy + r * (cs + gap), cs, PREVIEW_COLORS[r * 2 + c], 4);
+  return cvs;
+}
+
+function _makeSkinCard(skin) {
+  const owned    = economy.unlockedIds.has(skin.id);
+  const isActive = economy.activeSkinId === skin.id;
+
+  const card = document.createElement('div');
+  const cardClass = isActive ? 'skin-card active-card' : owned ? 'skin-card owned-card' : 'skin-card locked';
+  card.className = cardClass;
+
+  const badge = document.createElement('span');
+  badge.className = 'skin-badge ' + (isActive ? 'activeb' : owned ? 'owned' : 'price');
+  badge.textContent = isActive ? 'ACTIVE' : owned ? 'OWNED' : `${skin.price}\uD83E\uDE99`;
+
+  const name = document.createElement('span');
+  name.className = 'skin-name'; name.textContent = skin.name;
+  const desc = document.createElement('span');
+  desc.className = 'skin-desc'; desc.textContent = skin.desc;
+
+  card.append(_makeSkinPreview(skin), badge, name, desc);
+
+  if (owned && !isActive) {
+    card.addEventListener('click', () => {
+      economy.setActive(skin.id);
+      if (game) {
+        game.renderer.setSkin(skin);
+        game._renderTray();
+        if (isGameOver(game.tray.filter(Boolean), game.grid))
+          setTimeout(() => game._gameOver(), 400);
+      }
+      renderSkinsPage();
+    });
+  }
+  return card;
+}
+
 function renderSkinsPage() {
-  document.getElementById('skins-coin-display').textContent = economy.coins;
+  _el('skins-coin-display').textContent = economy.coins;
   const locked = SKINS.filter(s => s.price > 0 && !economy.unlockedIds.has(s.id));
   buyRandomBtn.disabled = locked.length === 0 || economy.coins < 100;
-
   skinsGrid.innerHTML = '';
-  for (const skin of SKINS) {
-    const owned    = economy.unlockedIds.has(skin.id);
-    const isActive = economy.activeSkinId === skin.id;
-
-    const card = document.createElement('div');
-    card.className = 'skin-card' + (isActive ? ' active-card' : '') + (!owned ? ' locked' : '');
-
-    // 2x2 preview canvas
-    const pEl = document.createElement('canvas');
-    pEl.width = 84; pEl.height = 84;
-    pEl.className = 'skin-preview-canvas';
-    const ctx = pEl.getContext('2d');
-    ctx.fillStyle = '#13132a'; ctx.fillRect(0,0,84,84);
-    const cs = 30, gap = 4, ox = 5, oy = 5;
-    const cols = ['#a78bfa','#60a5fa','#34d399','#f59e0b'];
-    for (let r=0; r<2; r++) for (let c=0; c<2; c++)
-      skin.drawCell(ctx, ox+c*(cs+gap), oy+r*(cs+gap), cs, cols[r*2+c], 4);
-
-    const badge = document.createElement('span');
-    badge.className = 'skin-badge ' + (isActive ? 'activeb' : owned ? 'owned' : 'price');
-    badge.textContent = isActive ? 'ACTIVE' : owned ? 'OWNED' : `${skin.price}\uD83E\uDE99`;
-
-    const name = document.createElement('span');
-    name.className = 'skin-name'; name.textContent = skin.name;
-    const desc = document.createElement('span');
-    desc.className = 'skin-desc'; desc.textContent = skin.desc;
-
-    card.append(pEl, badge, name, desc);
-
-    if (owned && !isActive) {
-      card.addEventListener('click', () => {
-        economy.setActive(skin.id);
-        if (game) { game.renderer.setSkin(skin); game._renderTray(); }
-        renderSkinsPage();
-      });
-    }
-    skinsGrid.appendChild(card);
-  }
+  SKINS.forEach(skin => skinsGrid.appendChild(_makeSkinCard(skin)));
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function updateCoinDisplays() {
   const c = economy.coins;
-  const eC = document.getElementById('coin-display');
-  const eS = document.getElementById('skins-coin-display');
-  const eM = document.getElementById('market-coin-display');
-  if (eC) eC.textContent = c;
-  if (eS) eS.textContent = c;
-  if (eM) eM.textContent = c;
+  ['coin-display', 'skins-coin-display', 'market-coin-display'].forEach(id => {
+    const el = _el(id); if (el) el.textContent = c;
+  });
 }
 
 let _toastTimer = null;
-function showToast(msg) {
+function showToast(msg, { error = false } = {}) {
   toastEl.textContent = msg;
+  toastEl.classList.toggle('toast--error', error);
   toastEl.classList.add('show');
   clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1500);
+  _toastTimer = setTimeout(() => {
+    toastEl.classList.remove('show');
+    toastEl.classList.remove('toast--error');
+  }, error ? 4000 : 1500);
 }
 
 // ── Market page ───────────────────────────────────────────────────────────────
 
+function _makeMarketItem(pu) {
+  const item = document.createElement('div');
+  item.className = 'market-item';
+
+  const icon = document.createElement('div');
+  icon.className = 'market-item-icon'; icon.textContent = pu.icon;
+
+  const info = document.createElement('div');
+  info.className = 'market-item-info';
+  info.innerHTML = `<div class="market-item-name">${pu.name}</div><div class="market-item-desc">${pu.desc}</div>`;
+
+  const cnt = document.createElement('span');
+  cnt.className = 'market-count';
+  cnt.textContent = `x${market.count(pu.id)}`;
+
+  const buyBtn = document.createElement('button');
+  buyBtn.className = 'market-buy-btn';
+  buyBtn.textContent = `${pu.price} 🪙`;
+  buyBtn.disabled = economy.coins < pu.price;
+  buyBtn.addEventListener('click', () => {
+    const r = market.buy(pu.id, economy);
+    if (r.type === 'noCoins') { showToast(t('needMoreCoins')); return; }
+    updateCoinDisplays();
+    renderMarketPage();
+    showToast(`${t('got')} ${pu.name}!`);
+  });
+
+  const useBtn = document.createElement('button');
+  useBtn.className = 'market-use-btn';
+  useBtn.textContent = 'USE';
+  useBtn.disabled = market.count(pu.id) === 0 || !game;
+  useBtn.addEventListener('click', () => {
+    if (!game) { showToast(t('noGame')); return; }
+    game.activatePowerup(pu.id);
+    showPage('play');
+  });
+
+  const actions = document.createElement('div');
+  actions.className = 'market-item-actions';
+  actions.append(cnt, buyBtn, useBtn);
+  item.append(icon, info, actions);
+  return item;
+}
+
 function renderMarketPage() {
-  document.getElementById('market-coin-display').textContent = economy.coins;
+  _el('market-coin-display').textContent = economy.coins;
   marketGrid.innerHTML = '';
-  for (const pu of POWERUPS) {
-    const item = document.createElement('div');
-    item.className = 'market-item';
+  POWERUPS.forEach(pu => marketGrid.appendChild(_makeMarketItem(pu)));
+  _renderCoinPacks();
+}
 
-    const icon = document.createElement('div');
-    icon.className = 'market-item-icon'; icon.textContent = pu.icon;
+// ── Coin packs ────────────────────────────────────────────────────────────────
 
-    const info = document.createElement('div');
-    info.className = 'market-item-info';
-    info.innerHTML = `<div class="market-item-name">${pu.name}</div><div class="market-item-desc">${pu.desc}</div>`;
+const COIN_PACKS = [
+  { id: 'pack_sm',  coins: 200,  price: '₺9,99',  icon: '🪙',  label: '200 Altın' },
+  { id: 'pack_md',  coins: 600,  price: '₺24,99', icon: '💰',  label: '600 Altın', best: true },
+  { id: 'pack_lg',  coins: 1500, price: '₺49,99', icon: '💎',  label: '1500 Altın' },
+];
 
-    const actions = document.createElement('div');
-    actions.className = 'market-item-actions';
+function _makeCoinPack(pack) {
+  const el = document.createElement('div');
+  el.className = 'coin-pack' + (pack.best ? ' best-value' : '');
+  el.innerHTML = `
+    <span class="coin-pack-icon">${pack.icon}</span>
+    <span class="coin-pack-coins">${pack.label}</span>
+    <span class="coin-pack-price">${pack.price}</span>
+    ${pack.best ? '<span class="coin-pack-badge">EN İYİ</span>' : ''}
+  `;
+  el.addEventListener('click', () => {
+    // Simulate IAP — award coins instantly (placeholder until payment SDK integrated)
+    economy.addCoins(pack.coins);
+    updateCoinDisplays();
+    _updateStartScreen();
+    renderMarketPage();
+    showToast(`+${pack.coins} 🪙 Teşekkürler!`);
+  });
+  return el;
+}
 
-    const cnt = document.createElement('span');
-    cnt.className = 'market-count';
-    cnt.textContent = `x${market.count(pu.id)}`;
-
-    const buyBtn = document.createElement('button');
-    buyBtn.className = 'market-buy-btn';
-    buyBtn.textContent = `${pu.price} 🪙`;
-    buyBtn.disabled = economy.coins < pu.price;
-    buyBtn.addEventListener('click', () => {
-      const r = market.buy(pu.id, economy);
-      if (r.type === 'noCoins') { showToast(t('needMoreCoins')); return; }
-      updateCoinDisplays();
-      renderMarketPage();
-      showToast(`${t('got')} ${pu.name}!`);
-    });
-
-    const useBtn = document.createElement('button');
-    useBtn.className = 'market-use-btn';
-    useBtn.textContent = 'USE';
-    useBtn.disabled = market.count(pu.id) === 0 || !game;
-    useBtn.addEventListener('click', () => {
-      if (!game) { showToast(t('noGame')); return; }
-      game.activatePowerup(pu.id);
-      showPage('play');
-    });
-
-    actions.append(cnt, buyBtn, useBtn);
-    item.append(icon, info, actions);
-    marketGrid.appendChild(item);
-  }
+function _renderCoinPacks() {
+  const grid = _el('coin-packs-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  COIN_PACKS.forEach(pack => grid.appendChild(_makeCoinPack(pack)));
 }
 
 // ╔══════════════════════════════════════════════════════════════════════════╗
@@ -427,8 +676,8 @@ class Game {
     // Size canvases to fit screen
     const size   = computeGridSize();
     const prevSz = computeTraySize(size);
-    const gridCanvas = document.getElementById('grid-canvas');
-    const fxCanvas   = document.getElementById('fx-canvas');
+    const gridCanvas = _el('grid-canvas');
+    const fxCanvas   = _el('fx-canvas');
     gridCanvas.width  = gridCanvas.height = size;
     fxCanvas.width    = fxCanvas.height   = size;
     document.querySelectorAll('.block-preview').forEach(el => {
@@ -437,12 +686,7 @@ class Game {
 
     this.renderer = new Renderer(this.grid, gridCanvas, fxCanvas);
     this.renderer.setSkin(economy.getActiveSkin());
-    // Give particles the correct cell dimensions after renderer is sized
-    this.particles.cellMetrics = {
-      cell:    this.renderer.CELL,
-      gap:     this.renderer.GAP,
-      padding: this.renderer.PADDING,
-    };
+    this._syncCellMetrics();
 
     this.tray       = [];
     this.usedMask   = [];
@@ -451,9 +695,9 @@ class Game {
     this._coinsAtGameStart = economy.coins;
 
     // UI refs
-    this.scoreEl = document.getElementById('score-display');
-    this.bestEl  = document.getElementById('best-display');
-    this.comboEl = document.getElementById('combo-display');
+    this.scoreEl = _el('score-display');
+    this.bestEl  = _el('best-display');
+    this.comboEl = _el('combo-display');
 
     // Wire observers
     this.grid.onChange(cells => this.renderer.redrawCells(cells));
@@ -475,7 +719,29 @@ class Game {
     this._loop(performance.now());
   }
 
-  // ── Coin earning ───────────────────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  _syncCellMetrics() {
+    this.particles.cellMetrics = {
+      cell:    this.renderer.CELL,
+      gap:     this.renderer.GAP,
+      padding: this.renderer.PADDING,
+    };
+  }
+
+  _buildSnap(extraPositions = []) {
+    const snap = {};
+    for (let r = 0; r < Grid.SIZE; r++)
+      for (let c = 0; c < Grid.SIZE; c++) {
+        const cell = this.grid.get(r, c);
+        if (!cell.isEmpty) snap[`${r},${c}`] = cell.colorID;
+      }
+    for (const { row: r, col: c, colorID } of extraPositions)
+      snap[`${r},${c}`] = colorID;
+    return snap;
+  }
+
+  // ── Coin earning ──────────────────────────────────────────────────────────
 
   _checkCoins(score) {
     const milestone = Math.floor(score / SCORE_PER_COIN);
@@ -495,11 +761,12 @@ class Game {
     this.tray     = generateTray(this.grid, TRAY_SIZE, hard);
     this.usedMask = new Array(TRAY_SIZE).fill(false);
     this._renderTray();
+    if (isGameOver(this.tray.filter(Boolean), this.grid))
+      setTimeout(() => this._gameOver(), 400);
   }
 
   _renderTray() {
-    // Ensure enough preview canvases exist (extra_block may grow tray beyond TRAY_SIZE)
-    const tray = document.getElementById('tray');
+    const tray = _el('tray');
     while (tray.children.length < this.tray.length) {
       const idx = tray.children.length;
       const el = document.createElement('canvas');
@@ -510,7 +777,7 @@ class Game {
       this.renderer.rebindDrag();
     }
     for (let i = 0; i < this.tray.length; i++) {
-      const el = document.getElementById(`block${i}`);
+      const el = _el(`block${i}`);
       if (!el) continue;
       el.classList.remove('used', 'dragging');
       this.renderer.drawBlockPreview(el, this.tray[i]);
@@ -519,7 +786,7 @@ class Game {
 
   _markUsed(idx) {
     this.usedMask[idx] = true;
-    document.getElementById(`block${idx}`).classList.add('used');
+    _el(`block${idx}`).classList.add('used');
     this.tray[idx] = null;
     if (this.tray.every(b => b === null)) setTimeout(() => this._dealTray(), 300);
   }
@@ -531,12 +798,7 @@ class Game {
     if (!this.grid.canPlace(positions)) return;
 
     // Snapshot colors before placement (for particles)
-    const snap = {};
-    for (let r = 0; r < Grid.SIZE; r++)
-      for (let c = 0; c < Grid.SIZE; c++) {
-        const cell = this.grid.get(r, c);
-        if (!cell.isEmpty) snap[`${r},${c}`] = cell.colorID;
-      }
+    const snap = this._buildSnap();
 
     this.grid.fillMany(positions, block.colorID, block.id);
     for (const { row: r, col: c } of positions) snap[`${r},${c}`] = block.colorID;
@@ -557,7 +819,6 @@ class Game {
         now:           performance.now(),
       });
       this.particles.spawnScoreFloat(result.cleared, delta, label, PALETTE, snap);
-      if (label) showToast(label);
       // pick sound based on how impressive the clear is
       const hasMega = result.clearedRows.length > 0 && result.clearedCols.length > 0 && result.colorClusters.length > 0;
       if (hasMega)                             playMega();
@@ -575,12 +836,12 @@ class Game {
     const now = performance.now();
     const dt  = Math.min((now - last) / 1000, 0.05);
     this.renderer.tickTweens(dt);
-    // Always clear fxCtx each frame: removes ghost after drag ends,
-    // and gives particles a clean canvas to draw on.
+    // Clear fxCtx each frame, then redraw particles + ghost
     this.renderer.fxCtx.clearRect(0, 0, this.renderer.fxCanvas.width, this.renderer.fxCanvas.height);
     if (this.particles.hasParticles) {
       this.particles.tick(dt, this.renderer.fxCtx);
     }
+    this.renderer.redrawGhost();
     requestAnimationFrame(t => this._loop(t));
   }
 
@@ -588,18 +849,11 @@ class Game {
 
   _gameOver() {
     const earned = economy.coins - this._coinsAtGameStart;
-    document.getElementById('final-score').textContent = this.scoreSystem.score.toLocaleString();
-    document.getElementById('final-coins').textContent = `+${earned} \uD83E\uDE99`;
+    _el('final-score').textContent = this.scoreSystem.score.toLocaleString();
+    _el('final-coins').textContent = `+${earned} \uD83E\uDE99`;
     overlayEl.classList.remove('hidden');
     // Auto-save progress to cloud
-    if (_currentUser) {
-      saveCloudSave(_currentUser.uid, {
-        coins:        economy.coins,
-        unlockedIds:  [...economy.unlockedIds],
-        activeSkinId: economy.activeSkinId,
-        bestScore:    Number(localStorage.getItem('weaverBest') ?? 0),
-      }).catch(() => {});
-    }
+    if (_currentUser) saveCloudSave(_currentUser.uid, _cloudSavePayload()).catch(() => {});
   }
 
   // ── Restart ────────────────────────────────────────────────────────────────
@@ -620,8 +874,8 @@ class Game {
   _handleResize() {
     const size   = computeGridSize();
     const prevSz = computeTraySize(size);
-    const gc     = document.getElementById('grid-canvas');
-    const fc     = document.getElementById('fx-canvas');
+    const gc = _el('grid-canvas');
+    const fc = _el('fx-canvas');
     if (gc.width === size) return;
     gc.width = gc.height = size;
     fc.width = fc.height = size;
@@ -629,11 +883,7 @@ class Game {
       el.width = el.height = prevSz;
     });
     this.renderer.resize();
-    this.particles.cellMetrics = {
-      cell:    this.renderer.CELL,
-      gap:     this.renderer.GAP,
-      padding: this.renderer.PADDING,
-    };
+    this._syncCellMetrics();
     this._renderTray();
   }
 
@@ -682,25 +932,25 @@ class Game {
       ? '➡️ Tap a cell to blast right'
       : '⬅️ Tap a cell to blast left';
     powerupHint.classList.remove('hidden');
-    document.getElementById('game-container').classList.add('powerup-target');
+    _el('game-container').classList.add('powerup-target');
 
     const onTap = (e) => {
       e.preventDefault();
       e.stopPropagation();
       const pt = e.touches ? e.touches[0] : e;
       const { row, col } = this.renderer._screenToGrid(pt.clientX, pt.clientY);
-      if (row < 0) return; // tapped outside grid
+      if (row < 0) return;
 
       powerupHint.classList.add('hidden');
-      document.getElementById('game-container').classList.remove('powerup-target');
-      document.getElementById('fx-canvas').removeEventListener('pointerdown', onTap);
-      document.getElementById('fx-canvas').removeEventListener('touchstart', onTap);
+      _el('game-container').classList.remove('powerup-target');
+      _el('fx-canvas').removeEventListener('pointerdown', onTap);
+      _el('fx-canvas').removeEventListener('touchstart', onTap);
 
       this._applyTargetedPowerup(this._pendingPowerup, row, col);
       this._pendingPowerup = null;
     };
 
-    const fxEl = document.getElementById('fx-canvas');
+    const fxEl = _el('fx-canvas');
     fxEl.addEventListener('pointerdown', onTap, { once: true });
     fxEl.addEventListener('touchstart',  onTap, { once: true, passive: false });
   }
@@ -729,11 +979,7 @@ class Game {
 
   _executeClear(positions, label) {
     if (!positions.length) return;
-    const snap = {};
-    for (const { row, col } of positions) {
-      const cell = this.grid.get(row, col);
-      if (!cell.isEmpty) snap[`${row},${col}`] = cell.colorID;
-    }
+    const snap = this._buildSnap();
     this.grid.clearMany(positions);
     this.particles.burstCells(positions, PALETTE, snap);
     const { delta } = this.scoreSystem.record({
@@ -742,7 +988,6 @@ class Game {
       now: performance.now(),
     });
     this.particles.spawnScoreFloat(positions, delta, label, PALETTE, snap);
-    showToast(label);
     playCluster();
     updateCoinDisplays();
   }

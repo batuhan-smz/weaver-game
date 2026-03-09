@@ -83,46 +83,86 @@ export const SKINS = [
     }
   },
   {
-    id: 'lava', name: 'Lava', desc: 'Molten hot', price: 100,
-    previewColor: '#ff4500',
+    id: 'darkheart', name: 'Dark Heart', desc: 'Sweet but sinister', price: 100,
     drawCell(ctx, x, y, sz, hex, cr) {
-      const g = ctx.createLinearGradient(x, y+sz, x, y);
-      g.addColorStop(0, '#cc1100'); g.addColorStop(.5, '#ff5500'); g.addColorStop(1, '#ffbb00');
-      _rr(ctx, x, y, sz, sz, cr); ctx.fillStyle = g; ctx.fill();
-      ctx.fillStyle = 'rgba(255,210,60,0.18)';
-      _rr(ctx, x+3, y+3, sz-6, Math.max(4, sz*0.32), 2); ctx.fill();
-    }
-  },
-  {
-    id: 'ice', name: 'Ice', desc: 'Frozen crystal', price: 100,
-    previewColor: '#a0e8ff',
-    drawCell(ctx, x, y, sz, hex, cr) {
-      const g = ctx.createLinearGradient(x, y, x+sz, y+sz);
-      g.addColorStop(0, '#eafaff'); g.addColorStop(.5, '#88d8f0'); g.addColorStop(1, '#3a88bb');
-      _rr(ctx, x, y, sz, sz, cr); ctx.fillStyle = g; ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,0.5)';
-      const sq = Math.max(4, sz * .3);
-      _rr(ctx, x+3, y+3, sq, sq, 3); ctx.fill();
+      // Dark candy base
+      _rr(ctx, x, y, sz, sz, cr);
+      ctx.fillStyle = '#0e0610'; ctx.fill();
+      // Candy color layer using hex
       ctx.save();
       _rr(ctx, x, y, sz, sz, cr); ctx.clip();
-      ctx.strokeStyle = 'rgba(255,255,255,0.65)'; ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(x+sz*.65, y+sz*.08); ctx.lineTo(x+sz*.82, y+sz*.62); ctx.stroke();
+      const g = ctx.createLinearGradient(x, y, x, y + sz);
+      g.addColorStop(0, hex + 'dd'); g.addColorStop(0.5, hex + '88'); g.addColorStop(1, hex + 'bb');
+      ctx.fillStyle = g; ctx.fill();
+      // Diagonal candy stripes
+      ctx.strokeStyle = 'rgba(255,255,255,0.13)'; ctx.lineWidth = 3;
+      for (let i = -sz; i < sz * 2; i += 9) {
+        ctx.beginPath(); ctx.moveTo(x + i, y + sz); ctx.lineTo(x + i + sz, y); ctx.stroke();
+      }
       ctx.restore();
+      // Mini heart
+      const cx = x + sz * 0.5, cy = y + sz * 0.52, hs = sz * 0.19;
+      ctx.save(); ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.beginPath();
+      ctx.moveTo(cx, cy + hs);
+      ctx.bezierCurveTo(cx - hs * 1.4, cy + hs * 0.1, cx - hs * 1.6, cy - hs * 0.6, cx, cy - hs * 0.3);
+      ctx.bezierCurveTo(cx + hs * 1.6, cy - hs * 0.6, cx + hs * 1.4, cy + hs * 0.1, cx, cy + hs);
+      ctx.fill(); ctx.restore();
+      // Top gloss
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      _rr(ctx, x + 3, y + 3, sz - 6, Math.max(4, sz * 0.24), 2); ctx.fill();
     }
   },
   {
-    id: 'gold', name: 'Gold', desc: 'Shiny metallic', price: 100,
-    previewColor: '#ffd700',
+    id: 'obsidian', name: 'Obsidian', desc: 'Volcanic dark glass', price: 100,
     drawCell(ctx, x, y, sz, hex, cr) {
-      const g = ctx.createLinearGradient(x, y, x+sz, y+sz);
-      g.addColorStop(0, '#fffaaa'); g.addColorStop(.3, '#ffd700');
-      g.addColorStop(.65, '#b8860b'); g.addColorStop(1, '#ffd700');
-      _rr(ctx, x, y, sz, sz, cr); ctx.fillStyle = g; ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,180,0.4)';
-      _rr(ctx, x+3, y+3, sz-6, Math.max(4, sz*0.26), 2); ctx.fill();
-      ctx.strokeStyle = 'rgba(180,130,0,0.45)'; ctx.lineWidth = 1;
-      _rr(ctx, x+.5, y+.5, sz-1, sz-1, cr); ctx.stroke();
+      // Very dark base
+      _rr(ctx, x, y, sz, sz, cr);
+      const g = ctx.createLinearGradient(x, y, x + sz, y + sz);
+      g.addColorStop(0, '#0d0d12'); g.addColorStop(1, '#050508');
+      ctx.fillStyle = g; ctx.fill();
+      // Crystal facets using hex
+      ctx.save();
+      _rr(ctx, x, y, sz, sz, cr); ctx.clip();
+      ctx.fillStyle = hex + '36';
+      ctx.beginPath();
+      ctx.moveTo(x, y); ctx.lineTo(x + sz * 0.7, y); ctx.lineTo(x + sz * 0.4, y + sz * 0.55);
+      ctx.lineTo(x, y + sz * 0.3); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = hex + '22';
+      ctx.beginPath();
+      ctx.moveTo(x + sz, y + sz); ctx.lineTo(x + sz * 0.3, y + sz); ctx.lineTo(x + sz * 0.6, y + sz * 0.45);
+      ctx.lineTo(x + sz, y + sz * 0.7); ctx.closePath(); ctx.fill();
+      ctx.restore();
+      // Hex glow border
+      ctx.save();
+      ctx.shadowColor = hex; ctx.shadowBlur = 10;
+      ctx.strokeStyle = hex + '99'; ctx.lineWidth = 1.5;
+      _rr(ctx, x + 1, y + 1, sz - 2, sz - 2, cr); ctx.stroke();
+      ctx.restore();
+      // Sharp glint
+      ctx.fillStyle = 'rgba(255,255,255,0.22)';
+      ctx.beginPath();
+      ctx.moveTo(x + sz * 0.14, y + sz * 0.12); ctx.lineTo(x + sz * 0.3, y + sz * 0.12);
+      ctx.lineTo(x + sz * 0.18, y + sz * 0.28); ctx.closePath(); ctx.fill();
+    }
+  },
+  {
+    id: 'pixel', name: 'Pixel', desc: '8-bit retro', price: 100,
+    drawCell(ctx, x, y, sz, hex, _cr) {
+      // Intentionally square — no rounded corners for pixel art look
+      ctx.fillStyle = hex; ctx.fillRect(x, y, sz, sz);
+      const bw = Math.max(2, Math.floor(sz * 0.14));
+      // Top / left highlight
+      ctx.fillStyle = _lighten(hex, 0.38);
+      ctx.fillRect(x, y, sz, bw);
+      ctx.fillRect(x, y, bw, sz);
+      // Bottom / right shadow
+      ctx.fillStyle = _darken(hex, 0.35);
+      ctx.fillRect(x, y + sz - bw, sz, bw);
+      ctx.fillRect(x + sz - bw, y, bw, sz);
+      // Inner face
+      ctx.fillStyle = _lighten(hex, 0.12);
+      ctx.fillRect(x + bw, y + bw, sz - bw * 2, sz - bw * 2);
     }
   },
   {
@@ -157,7 +197,7 @@ export const SKINS = [
     previewColor: '#6622cc',
     drawCell(ctx, x, y, sz, hex, cr) {
       const g = ctx.createLinearGradient(x, y, x+sz, y+sz);
-      g.addColorStop(0, '#180038'); g.addColorStop(.5, '#3300aa'); g.addColorStop(1, '#001888');
+      g.addColorStop(0, _darken(hex, 0.82)); g.addColorStop(.5, _darken(hex, 0.55)); g.addColorStop(1, _darken(hex, 0.78));
       _rr(ctx, x, y, sz, sz, cr); ctx.fillStyle = g; ctx.fill();
       ctx.save();
       _rr(ctx, x, y, sz, sz, cr); ctx.clip();
@@ -166,7 +206,7 @@ export const SKINS = [
       for (const [dx,dy] of dots)
         ctx.fillRect(Math.round(x+dx*sz), Math.round(y+dy*sz), 1.5, 1.5);
       ctx.restore();
-      ctx.strokeStyle = 'rgba(140,80,255,0.45)'; ctx.lineWidth = 1;
+      ctx.strokeStyle = hex + '55'; ctx.lineWidth = 1;
       _rr(ctx, x+1, y+1, sz-2, sz-2, cr); ctx.stroke();
     }
   },
@@ -174,21 +214,21 @@ export const SKINS = [
     id: 'matrix', name: 'Matrix', desc: 'Enter the grid', price: 100,
     previewColor: '#00ff41',
     drawCell(ctx, x, y, sz, hex, cr) {
-      _rr(ctx, x, y, sz, sz, cr); ctx.fillStyle = '#010d01'; ctx.fill();
+      _rr(ctx, x, y, sz, sz, cr); ctx.fillStyle = _darken(hex, 0.88); ctx.fill();
       ctx.save();
       _rr(ctx, x, y, sz, sz, cr); ctx.clip();
       const fs = Math.max(7, Math.floor(sz * .32));
       ctx.font = `${fs}px monospace`; ctx.textBaseline = 'top';
       const px = Math.round(x), py = Math.round(y);
       const seed = ((px >> 2) * 3 + (py >> 2) * 7);
-      ctx.fillStyle = 'rgba(0,255,65,0.75)';
+      ctx.fillStyle = hex + 'bf';
       ctx.fillText('01'.charAt(seed % 2), px + sz*.15, py + sz*.1);
-      ctx.fillStyle = 'rgba(0,255,65,0.4)';
+      ctx.fillStyle = hex + '66';
       ctx.fillText('01'.charAt((seed+1) % 2), px + sz*.55, py + sz*.52);
       ctx.restore();
       ctx.save();
-      ctx.shadowColor = '#00ff41'; ctx.shadowBlur = 8;
-      ctx.strokeStyle = 'rgba(0,255,65,0.5)'; ctx.lineWidth = 1;
+      ctx.shadowColor = hex; ctx.shadowBlur = 8;
+      ctx.strokeStyle = hex + '80'; ctx.lineWidth = 1;
       _rr(ctx, x+.5, y+.5, sz-1, sz-1, cr); ctx.stroke();
       ctx.restore();
     }

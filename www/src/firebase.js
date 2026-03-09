@@ -30,14 +30,20 @@ const IS_NATIVE = typeof window !== 'undefined' &&
     ? window.Capacitor.isNativePlatform()
     : !!window.Capacitor.isNative);
 
-// Lazy-loaded Firebase modules
+// Lazy-loaded Firebase modules — cache the PROMISE so initializeApp is never called twice
 let _s = null;
+let _initPromise = null;
 
-async function _init() {
-  if (_s) return _s;
+function _init() {
+  if (_s) return Promise.resolve(_s);
+  if (!_initPromise) _initPromise = _doInit();
+  return _initPromise;
+}
+
+async function _doInit() {
   const { FIREBASE_CONFIG } = await import('./firebase-config.js');
   const [
-    { initializeApp },
+    { initializeApp, getApp },
     { getAuth, GoogleAuthProvider, signInWithPopup, signInWithCredential, signOut, onAuthStateChanged },
     { getFirestore, doc, getDoc, setDoc, serverTimestamp },
   ] = await Promise.all([
@@ -45,7 +51,13 @@ async function _init() {
     import(`${CDN}/firebase-auth.js`),
     import(`${CDN}/firebase-firestore.js`),
   ]);
-  const app  = initializeApp(FIREBASE_CONFIG);
+  // Guard against "app already exists" if initializeApp was called before
+  let app;
+  try {
+    app = initializeApp(FIREBASE_CONFIG);
+  } catch (e) {
+    app = getApp();
+  }
   const auth = getAuth(app);
   const db   = getFirestore(app);
   _s = {
@@ -72,6 +84,12 @@ export async function googleSignIn() {
       const pluginKeys = Object.keys(window.Capacitor?.Plugins ?? {}).join(',');
       throw new Error('GoogleAuth plugin not found. Available: ' + pluginKeys);
     }
+    // initialize() must be called before signIn() to set up GoogleSignInClient
+    await GoogleAuth.initialize({
+      clientId: '81968395529-shv2jhlldjmk3g94eervp36e8r9n0g77.apps.googleusercontent.com',
+      scopes: ['profile', 'email'],
+      grantOfflineAccess: true,
+    });
     const googleUser = await GoogleAuth.signIn();
     const credential = s.GoogleAuthProvider.credential(
       googleUser.authentication.idToken,

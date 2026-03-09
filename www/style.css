@@ -69,6 +69,67 @@ html, body {
 }
 #start-btn:active { transform: scale(0.95); }
 
+#ss-settings-btn {
+  background: linear-gradient(135deg, #2a2a3e, #1a1a2e);
+  color: #9090bb; border: 1px solid #3a3a5e; border-radius: 16px;
+  padding: 14px 72px; font-size: 0.95rem; font-weight: 700;
+  letter-spacing: 3px; cursor: pointer; width: 100%; max-width: 260px;
+  transition: transform 0.12s, background 0.2s;
+}
+#ss-settings-btn:active { transform: scale(0.95); }
+
+/* ── Earn row (watch ad / buy coins) ─────────────────────────── */
+#ss-earn-row {
+  display: flex; gap: 10px; width: 100%; max-width: 300px;
+}
+#ss-earn-row button {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  gap: 3px; padding: 11px 8px; border: 1px solid #3a3a5e; border-radius: 14px;
+  background: #16162a; cursor: pointer;
+  transition: transform 0.12s, background 0.15s;
+  color: inherit;
+}
+#ss-earn-row button:active { transform: scale(0.95); background: #1e1e3a; }
+#ss-earn-row button:disabled { opacity: 0.55; cursor: default; transform: none; }
+#ss-watch-ad-btn  { border-color: #22c55e44; }
+#ss-buy-coins-btn { border-color: #f59e0b44; }
+.earn-icon  { font-size: 1.4rem; line-height: 1; }
+.earn-label { font-size: 0.65rem; font-weight: 700; letter-spacing: 1px; color: #9090bb; }
+.earn-reward { font-size: 0.7rem; font-weight: 800; }
+#ss-watch-ad-btn  .earn-reward { color: #4ade80; }
+#ss-buy-coins-btn .earn-reward { color: #fbbf24; }
+#ss-watch-ad-btn.watching { opacity: 0.7; pointer-events: none; }
+
+/* ── Coin packs (market page) ────────────────────────────────── */
+#coin-packs-section {
+  padding: 10px 14px 6px; border-top: 1px solid #1e1e36;
+}
+#coin-packs-title {
+  font-size: 0.7rem; letter-spacing: 2px; color: #fbbf24;
+  margin: 0 0 10px; text-align: center;
+}
+#coin-packs-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+}
+.coin-pack {
+  background: #1a1a30; border: 1px solid #f59e0b44; border-radius: 12px;
+  padding: 10px 6px; display: flex; flex-direction: column;
+  align-items: center; gap: 4px; cursor: pointer;
+  transition: transform 0.12s, background 0.15s;
+  position: relative;
+}
+.coin-pack:active { transform: scale(0.95); background: #22221a; }
+.coin-pack.best-value { border-color: #f59e0b; box-shadow: 0 0 10px #f59e0b44; }
+.coin-pack-icon  { font-size: 1.6rem; line-height: 1; }
+.coin-pack-coins { font-size: 0.85rem; font-weight: 900; color: #fde68a; }
+.coin-pack-price { font-size: 0.62rem; color: #9090bb; letter-spacing: 1px; }
+.coin-pack-badge {
+  position: absolute; top: -7px; right: -4px;
+  background: #f59e0b; color: #0d0d1a;
+  font-size: 0.5rem; font-weight: 900; letter-spacing: 1px;
+  padding: 2px 6px; border-radius: 6px;
+}
+
 /* ═══ Main App ═══ */
 #main-app {
   position: fixed; inset: 0;
@@ -181,11 +242,26 @@ html, body {
   background: #1a1a2e; border: 2px solid #2a2a4a; border-radius: 14px;
   padding: 10px; display: flex; flex-direction: column; align-items: center;
   gap: 6px; cursor: pointer;
-  transition: border-color 0.15s, transform 0.1s;
+  transition: border-color 0.15s, transform 0.1s, background 0.15s, box-shadow 0.15s;
   position: relative;
 }
-.skin-card.active-card { border-color: #a78bfa; }
-.skin-card.locked { cursor: default; opacity: 0.65; }
+/* Owned (unlocked, not active) — bright green glow */
+.skin-card.owned-card {
+  background: #0e2218;
+  border-color: #22c55e;
+  box-shadow: 0 0 12px #22c55e44;
+}
+.skin-card.owned-card .skin-name { color: #86efac; }
+.skin-card.owned-card .skin-desc { color: #4ade8088; }
+/* Active — purple glow */
+.skin-card.active-card {
+  background: #180f2e;
+  border-color: #a78bfa;
+  box-shadow: 0 0 16px #a78bfa55;
+}
+.skin-card.active-card .skin-name { color: #c4b5fd; }
+/* Locked */
+.skin-card.locked { cursor: default; opacity: 0.5; filter: saturate(0.4); }
 .skin-card:active:not(.locked) { transform: scale(0.96); }
 
 .skin-preview-canvas { border-radius: 6px; display: block; }
@@ -242,7 +318,7 @@ html, body {
   background: linear-gradient(135deg, #7c3aed, #2563eb);
   color: #fff; font-size: 1.2rem; font-weight: 900;
   letter-spacing: 3px; padding: 12px 26px; border-radius: 14px;
-  pointer-events: none; opacity: 0; z-index: 9999;
+  pointer-events: none; opacity: 0; z-index: 150;
   transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1), opacity 0.4s;
   white-space: nowrap; max-width: 90vw;
   text-align: center;
@@ -341,7 +417,6 @@ html, body {
 
 /* ═══ Start Screen — Google login ═══ */
 #ss-signin-btn {
-  position: relative;
   display: flex; align-items: center; justify-content: center; gap: 10px;
   background: #fff;
   color: #3c4043; font-size: 0.9rem; font-weight: 700;
@@ -369,37 +444,19 @@ html, body {
 }
 #ss-signout-btn:active { color: #ef4444; }
 
-/* ─── Bonus badge overlay on sign-in button ─── */
-.btn-bonus-badge {
-  position: absolute; top: -9px; right: -9px;
-  background: linear-gradient(135deg, #f59e0b, #f97316);
-  color: #fff; font-size: 0.58rem; font-weight: 900;
-  padding: 3px 8px; border-radius: 10px;
-  white-space: nowrap; letter-spacing: 0.3px;
-  box-shadow: 0 1px 6px rgba(0,0,0,0.35);
-  pointer-events: none;
-}
-
-/* ─── Settings button on start screen (top-right) ─── */
-#ss-settings-btn {
-  position: absolute; top: 14px; right: 16px;
-  background: rgba(255,255,255,0.07); border: 1px solid #2a2a4a;
-  color: #c4b5fd; font-size: 1.3rem;
-  width: 40px; height: 40px; border-radius: 50%;
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
-  transition: background 0.15s;
-  z-index: 5;
-}
-#ss-settings-btn:active { background: rgba(167,139,250,0.2); }
-
-/* ─── Bonus badge in settings (text only) ─── */
-.signin-bonus-badge--settings {
-  display: flex; margin: 0 14px 8px;
-  align-items: center; gap: 6px;
+/* ─── Bonus badge above sign-in button ─── */
+.signin-bonus-badge {
+  display: inline-flex; align-items: center; gap: 6px;
   background: linear-gradient(135deg, #78350f55, #b4530922);
   border: 1px solid #b45309aa;
-  color: #fde68a; font-size: 0.78rem;
-  padding: 6px 16px; border-radius: 10px;
+  color: #fde68a;
+  font-size: 0.78rem; letter-spacing: 0.5px;
+  padding: 6px 16px; border-radius: 20px;
+}
+.signin-bonus-badge strong { color: #fbbf24; }
+.signin-bonus-badge--settings {
+  display: flex; margin: 0 14px 8px;
+  border-radius: 10px;
 }
 
 
@@ -458,23 +515,6 @@ html, body {
 .settings-btn--danger  { background: #3b1b1b; color: #f87171; }
 .settings-btn:active { opacity: 0.75; }
 
-/* Language selector grid */
-.settings-lang-grid {
-  display: flex; flex-wrap: wrap; gap: 8px;
-  padding: 10px 14px 14px;
-}
-.lang-btn {
-  background: #13132a; border: 1px solid #2a2a4a;
-  color: #9090c0; font-size: 0.78rem; font-weight: 600;
-  padding: 5px 12px; border-radius: 20px;
-  cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s;
-}
-.lang-btn:active { opacity: 0.75; }
-.lang-btn--active {
-  background: #4c1d95; border-color: #a78bfa;
-  color: #e9d5ff;
-}
-
 .settings-profile-row {
   display: flex; align-items: center; gap: 12px;
   padding: 12px 14px 8px;
@@ -490,6 +530,99 @@ html, body {
 .settings-version {
   text-align: center; font-size: 0.62rem; color: #3a3a5a; letter-spacing: 2px; margin-top: 4px;
 }
+
+/* ═══ Toggle switch ═══ */
+.toggle-switch {
+  position: relative; width: 44px; height: 24px; flex-shrink: 0;
+}
+.toggle-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.toggle-track {
+  position: absolute; inset: 0;
+  background: #2a2a4a; border-radius: 24px; cursor: pointer;
+  transition: background 0.2s;
+}
+.toggle-track::after {
+  content: ''; position: absolute;
+  width: 18px; height: 18px; left: 3px; top: 3px;
+  background: #fff; border-radius: 50%; transition: transform 0.2s;
+}
+.toggle-switch input:checked + .toggle-track { background: #7c3aed; }
+.toggle-switch input:checked + .toggle-track::after { transform: translateX(20px); }
+
+/* ═══ Skin reveal overlay ═══ */
+#skin-reveal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 200;
+}
+#skin-reveal-box {
+  background: #12122a; border: 1px solid #3a2a6a; border-radius: 20px;
+  padding: 28px 22px 22px;
+  display: flex; flex-direction: column; align-items: center; gap: 18px;
+  min-width: 280px; box-shadow: 0 0 40px #6622cc44;
+}
+#skin-reveal-title {
+  font-size: 1rem; font-weight: 800; letter-spacing: 1px; color: #c4b5fd;
+}
+#skin-reveal-reel-wrap {
+  background: #0d0d1e; border-radius: 12px;
+  overflow: hidden; border: 1px solid #2a2a4a;
+}
+#skin-reveal-result {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+#skin-reveal-canvas { border-radius: 12px; }
+#skin-reveal-name {
+  font-size: 1.1rem; font-weight: 800; color: #f5d06e;
+  text-align: center; letter-spacing: 1px;
+}
+#skin-reveal-close {
+  background: linear-gradient(135deg, #a78bfa, #60a5fa);
+  border: none; border-radius: 12px; color: #fff;
+  font-size: 0.9rem; font-weight: 700; padding: 10px 32px;
+  cursor: pointer; letter-spacing: 0.5px;
+}
+#skin-reveal-close:active { opacity: 0.75; }
+
+/* ═══ Score Float (DOM layer) ═══ */
+#float-layer {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.score-float {
+  position: absolute;
+  font-family: 'Segoe UI', sans-serif;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  animation: score-float-anim linear forwards;
+  will-change: transform, opacity;
+}
+@keyframes score-float-anim {
+  0%   { opacity: 1;   translate: 0 0; }
+  60%  { opacity: 1;   translate: 0 -54px; }
+  100% { opacity: 0;   translate: 0 -90px; }
+}
+
+.settings-lang-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 8px; margin: 4px 14px 0;
+}
+.lang-btn {
+  background: #1a1a2e; color: #9090bb;
+  border: 1px solid #2a2a4a; border-radius: 10px;
+  padding: 8px 4px; font-size: 0.75rem; font-weight: 600;
+  cursor: pointer; text-align: center;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.lang-btn--active {
+  background: linear-gradient(135deg, #7c3aed44, #2563eb44);
+  border-color: #7c3aed; color: #c4b5fd;
+}
+.lang-btn:active { opacity: 0.75; }
 
 
 #app {
@@ -604,13 +737,26 @@ h1 {
   pointer-events: none;
   transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1), opacity 0.4s;
   opacity: 0;
-  z-index: 100;
+  z-index: 9999;
   white-space: nowrap;
+  max-width: 88vw;
 }
 
 #feedback-toast.show {
   transform: translate(-50%, -50%) scale(1);
   opacity: 1;
+}
+
+#feedback-toast.toast--error {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  text-align: left;
+  padding: 12px 16px;
+  line-height: 1.4;
+  background: linear-gradient(135deg, #7f1d1d, #991b1b);
 }
 
 /* ===== Game Over ===== */

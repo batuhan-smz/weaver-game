@@ -74,37 +74,32 @@ class Particle {
 // ─── Floating Score Text ──────────────────────────────────────────────────────
 
 class ScoreFloat {
-  constructor(x, y, text, color) {
-    this.x        = x;
-    this.y        = y;
-    this.text     = text;
-    this.color    = color;
-    this.life     = 0;
-    this.duration = 1.1;
+  /**
+   * Spawns a DOM element in #float-layer with a CSS animation.
+   * tick() / draw() are no-ops — the browser handles the animation.
+   */
+  constructor(x, y, text, color, fontSize = 22) {
+    this._done = false;
+    const layer = document.getElementById('float-layer');
+    if (!layer) { this._done = true; return; }
+
+    const el = document.createElement('span');
+    el.className   = 'score-float';
+    el.textContent = text;
+    el.style.left     = `${x}px`;
+    el.style.top      = `${y}px`;
+    el.style.fontSize = `${fontSize}px`;
+    el.style.color    = color;
+    el.style.textShadow = `0 0 10px ${color}`;
+    const dur = 1.5;
+    el.style.animationDuration = `${dur}s`;
+    layer.appendChild(el);
+
+    setTimeout(() => { el.remove(); this._done = true; }, dur * 1000 + 50);
   }
 
-  tick(dt) {
-    this.life += dt / this.duration;
-    this.y    -= 40 * dt;       // drift upward
-    return this.life < 1;
-  }
-
-  draw(ctx) {
-    const alpha = this.life < 0.7 ? 1 : 1 - (this.life - 0.7) / 0.3;
-    const scale = this.life < 0.15
-      ? easeOutQuad(this.life / 0.15) * 1.4
-      : 1 + Math.max(0, 1.4 - 1 - this.life * 0.5);
-
-    ctx.save();
-    ctx.globalAlpha   = alpha;
-    ctx.font          = `bold ${Math.round(22 * scale)}px 'Segoe UI', sans-serif`;
-    ctx.textAlign     = 'center';
-    ctx.fillStyle     = this.color;
-    ctx.shadowColor   = this.color;
-    ctx.shadowBlur    = 12;
-    ctx.fillText(this.text, this.x, this.y);
-    ctx.restore();
-  }
+  tick()  { return !this._done; }
+  draw()  { /* CSS handles it */ }
 }
 
 // ─── ParticleSystem ───────────────────────────────────────────────────────────
@@ -145,11 +140,11 @@ export class ParticleSystem {
 
     const text  = label ? label : `+${delta}`;
     const color = label ? '#a78bfa' : '#60a5fa';
-    this._particles.push(new ScoreFloat(cx, cy, text, color));
+    this._particles.push(new ScoreFloat(cx, cy, text, color, label ? 26 : 22));
 
     if (label) {
-      // Secondary "+N" below the label
-      this._particles.push(new ScoreFloat(cx, cy + 28, `+${delta}`, '#60a5fa'));
+      // Secondary "+N" score below the label
+      this._particles.push(new ScoreFloat(cx, cy + 32, `+${delta}`, '#60a5fa', 18));
     }
   }
 

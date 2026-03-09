@@ -32,11 +32,11 @@ function hexToRgba(hex, alpha) {
 
 const _fallbackSkin = {
   drawCell(ctx, x, y, sz, hex, cr) {
-    const ri=parseInt(hex.slice(1,3),16), gi=parseInt(hex.slice(3,5),16), bi=parseInt(hex.slice(5,7),16);
-    const light = `#${Math.min(255,Math.round(ri+(255-ri)*.25)).toString(16).padStart(2,'0')}${Math.min(255,Math.round(gi+(255-gi)*.25)).toString(16).padStart(2,'0')}${Math.min(255,Math.round(bi+(255-bi)*.25)).toString(16).padStart(2,'0')}`;
-    const g = ctx.createLinearGradient(x, y, x+sz, y+sz);
-    g.addColorStop(0, light); g.addColorStop(1, hex);
-    _rr(ctx, x, y, sz, sz, cr); ctx.fillStyle = g; ctx.fill();
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i+2), 16));
+    const light = `#${[r, g, b].map(v => Math.min(255, Math.round(v + (255 - v) * 0.25)).toString(16).padStart(2, '0')).join('')}`;
+    const grad = ctx.createLinearGradient(x, y, x+sz, y+sz);
+    grad.addColorStop(0, light); grad.addColorStop(1, hex);
+    _rr(ctx, x, y, sz, sz, cr); ctx.fillStyle = grad; ctx.fill();
     ctx.fillStyle = 'rgba(255,255,255,0.1)';
     _rr(ctx, x+2, y+2, sz-4, Math.max(4, sz*.28), 2); ctx.fill();
   }
@@ -55,6 +55,7 @@ export class Renderer {
     this.dragging = null;
     this.onDrop   = null;
     this._getBlockForIndex = () => null;
+    this._ghostState = null; // { block, row, col, canPlace }
     this._bindDrag();
     this.resize();
   }
@@ -133,16 +134,26 @@ export class Renderer {
   }
 
   drawGhostAndHover(block, ghostRow, ghostCol, canPlace) {
+    // Just update state — the game loop redraws it each frame to avoid flickering
+    if (!block || ghostRow < 0) {
+      this._ghostState = null;
+    } else {
+      this._ghostState = { block, row: ghostRow, col: ghostCol, canPlace };
+    }
+  }
+
+  /** Called by the game loop each frame after clearing fxCtx. */
+  redrawGhost() {
+    const g = this._ghostState;
+    if (!g) return;
     const ctx = this.fxCtx;
-    ctx.clearRect(0,0,this.fxCanvas.width,this.fxCanvas.height);
-    if (!block || ghostRow < 0) return;
-    const hex = PALETTE[block.colorID]?.hex ?? '#888';
-    for (const [dr,dc] of block.cells) {
-      const row=ghostRow+dr, col=ghostCol+dc;
+    const hex = PALETTE[g.block.colorID]?.hex ?? '#888';
+    for (const [dr,dc] of g.block.cells) {
+      const row = g.row+dr, col = g.col+dc;
       if (row<0||row>=Grid.SIZE||col<0||col>=Grid.SIZE) continue;
       const x=this._cellX(col), y=this._cellY(row);
-      ctx.fillStyle   = canPlace ? hexToRgba(hex,.4) : 'rgba(255,50,50,0.25)';
-      ctx.strokeStyle = canPlace ? hex : '#ff4444';
+      ctx.fillStyle   = g.canPlace ? hexToRgba(hex,.4) : 'rgba(255,50,50,0.25)';
+      ctx.strokeStyle = g.canPlace ? hex : '#ff4444';
       ctx.lineWidth   = 2;
       _rr(ctx,x,y,this.CELL,this.CELL,this.RADIUS);
       ctx.fill(); ctx.stroke();
@@ -253,17 +264,11 @@ export class Renderer {
       if (snapped && snapped.canPlace && this.onDrop)
         this.onDrop(this.dragging.block, this.dragging.el, snapped.row, snapped.col);
       this.dragging.el.classList.remove('dragging');
+      this._ghostState = null;
       this.dragging = null; _lastPt = null; _lastSnap = null; _rafPending = false;
-      // fxCtx cleared by the game loop next frame — don't wipe live particles here
     };
-    document.querySelectorAll('.block-preview').forEach((el,idx) => {
-      const start = (e) => {
-        e.preventDefault();
-        const block = this._getBlockForIndex(idx);
-        if (!block || el.classList.contains('used')) return;
-        this.dragging = {block, el, idx};
-        el.classList.add('dragging');
-      };
+    document.querySelectorAll('.block-preview').forEach((el, idx) => {
+      const start = this._makeStartHandler(el, idx);
       el.addEventListener('mousedown',  start);
       el.addEventListener('touchstart', start, {passive:false});
     });
@@ -271,6 +276,16 @@ export class Renderer {
     window.addEventListener('touchmove',  onMove, {passive:false});
     window.addEventListener('mouseup',    onUp);
     window.addEventListener('touchend',   onUp);
+  }
+
+  _makeStartHandler(el, idx) {
+    return (e) => {
+      e.preventDefault();
+      const block = this._getBlockForIndex(idx);
+      if (!block || el.classList.contains('used')) return;
+      this.dragging = { block, el, idx };
+      el.classList.add('dragging');
+    };
   }
 
   _screenToGrid(sx, sy) {
@@ -290,16 +305,9 @@ export class Renderer {
   /** Re-bind drag start listeners (call after new .block-preview elements are added). */
   rebindDrag() {
     document.querySelectorAll('.block-preview').forEach((el, idx) => {
-      // Remove old listener by cloning (simple, idempotent)
       const clone = el.cloneNode(true);
       el.replaceWith(clone);
-      const start = (e) => {
-        e.preventDefault();
-        const block = this._getBlockForIndex(idx);
-        if (!block || clone.classList.contains('used')) return;
-        this.dragging = { block, el: clone, idx };
-        clone.classList.add('dragging');
-      };
+      const start = this._makeStartHandler(clone, idx);
       clone.addEventListener('mousedown',  start);
       clone.addEventListener('touchstart', start, { passive: false });
     });
