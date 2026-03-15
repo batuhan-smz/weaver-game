@@ -67,22 +67,143 @@
     </button>
   </div>
 
+  <!-- ══════════ MODE SELECT SHEET ══════════ -->
+  <div id="mode-select-overlay" class="hidden">
+    <div id="mode-select-backdrop"></div>
+    <div id="mode-select-sheet">
+      <div class="mode-select-title">MOD SEÇ</div>
+      <button id="mode-vs-btn" class="mode-card" disabled>
+        <span class="mode-card-icon">⚔️</span>
+        <div class="mode-card-info">
+          <div class="mode-card-name">1v1 VS Modu</div>
+          <div class="mode-card-desc">Çevrimiçi rakibe karşı oyna</div>
+        </div>
+        <span class="mode-card-tag" id="mode-vs-tag">GİRİŞ YAP</span>
+      </button>
+      <button id="mode-endless-btn" class="mode-card mode-card--endless">
+        <span class="mode-card-icon">∞</span>
+        <div class="mode-card-info">
+          <div class="mode-card-name">Sonsuz Mod</div>
+          <div class="mode-card-desc">Ne kadar süre dayanabilirsin?</div>
+        </div>
+      </button>
+    </div>
+  </div>
+
+  <!-- ══════════ VS LOBBY OVERLAY ══════════ -->
+  <div id="vs-overlay" class="hidden">
+
+    <!-- ── Screen: Choose method ── -->
+    <div id="vs-screen-choose" class="vs-screen">
+      <button id="vs-back-btn" class="vs-back">←</button>
+      <div class="vs-title">⚔️ 1v1 VS MODU</div>
+      <button id="vs-quick-btn" class="vs-big-btn">
+        <span class="vs-btn-icon">🎯</span>
+        <span class="vs-btn-label">Hızlı Eşleşme</span>
+        <span class="vs-btn-sub">Rastgele rakiple oyna</span>
+      </button>
+      <button id="vs-create-btn" class="vs-big-btn">
+        <span class="vs-btn-icon">🔗</span>
+        <span class="vs-btn-label">Arkadaşla Oyna</span>
+        <span class="vs-btn-sub">Davet kodu oluştur</span>
+      </button>
+      <div class="vs-or">VEYA</div>
+      <div class="vs-join-row">
+        <input id="vs-code-input" class="vs-code-input" maxlength="6"
+               placeholder="KOD GİR" autocomplete="off" spellcheck="false" />
+        <button id="vs-join-btn" class="vs-join-confirm-btn">Katıl</button>
+      </div>
+    </div>
+
+    <!-- ── Screen: Waiting for opponent ── -->
+    <div id="vs-screen-waiting" class="vs-screen hidden">
+      <button id="vs-cancel-wait-btn" class="vs-back">←</button>
+      <div class="vs-title">⏳ Bekleniyor...</div>
+      <div id="vs-invite-code-label" class="vs-invite-code-label">Arkadaşına bu kodu ver:</div>
+      <div id="vs-invite-code" class="vs-invite-code">——————</div>
+      <button id="vs-copy-code-btn" class="vs-copy-btn">📋 Kopyala</button>
+      <div class="vs-spinner"></div>
+      <div class="vs-wait-hint">Rakip bağlanınca oyun başlayacak</div>
+    </div>
+
+    <!-- ── Screen: Countdown ── -->
+    <div id="vs-screen-countdown" class="vs-screen hidden">
+      <div class="vs-vs-row">
+        <div class="vs-player-chip">
+          <div class="vs-player-name" id="vs-my-name">Sen</div>
+        </div>
+        <div class="vs-vs-badge">VS</div>
+        <div class="vs-player-chip vs-player-chip--opp">
+          <div class="vs-player-name" id="vs-opp-name">Rakip</div>
+        </div>
+      </div>
+      <div id="vs-countdown-num" class="vs-countdown-num">3</div>
+    </div>
+
+    <!-- ── Screen: Result ── -->
+    <div id="vs-screen-result" class="vs-screen hidden">
+      <div id="vs-result-icon" class="vs-result-icon">🏆</div>
+      <div id="vs-result-title" class="vs-result-title">KAZANDIN!</div>
+      <div class="vs-score-compare">
+        <div class="vs-score-box">
+          <div class="vs-score-label">Senin Skorun</div>
+          <div id="vs-my-final-score" class="vs-score-val">0</div>
+        </div>
+        <div class="vs-score-sep">—</div>
+        <div class="vs-score-box">
+          <div class="vs-score-label">Rakip</div>
+          <div id="vs-opp-final-score" class="vs-score-val">0</div>
+        </div>
+      </div>
+      <button id="vs-rematch-btn" class="vs-big-btn">🔄 Tekrar Oyna</button>
+      <button id="vs-exit-btn" class="vs-exit-btn">Ana Menü</button>
+    </div>
+
+  </div>
+
   <!-- ══════════ MAIN APP ══════════ -->
   <div id="main-app" class="hidden">
 
     <!-- ── PAGE: PLAY ── -->
     <div id="page-play" class="page">
       <div id="play-header">
-        <div class="hbox"><span class="hlabel">SCORE</span><span id="score-display">0</span></div>
+        <div class="hbox hbox--score">
+          <span class="hlabel">SCORE</span>
+          <span id="score-display-wrap">
+            <span id="score-display">0</span>
+            <span id="combo-display" class="combo-pill">x1</span>
+          </span>
+        </div>
         <div id="coin-hud"><span class="coin-icon">🪙</span><span id="coin-display">0</span></div>
         <div class="hbox"><span class="hlabel">BEST</span><span id="best-display">0</span></div>
-        <div class="hbox"><span class="hlabel">COMBO</span><span id="combo-display">x1</span></div>
       </div>
       <div id="game-area">
+        <!-- VS opponent panel (hidden in normal mode) -->
+        <div id="vs-opp-panel" class="hidden">
+          <div class="vs-opp-name-row">
+            <span class="vs-opp-label" id="vs-opp-panel-name">Rakip</span>
+            <span class="vs-opp-score" id="vs-opp-panel-score">0</span>
+          </div>
+          <canvas id="vs-opp-canvas" width="96" height="96"></canvas>
+          <div id="vs-opp-gameover" class="vs-opp-gameover hidden">💀</div>
+        </div>
         <div id="game-container">
           <canvas id="grid-canvas"></canvas>
           <canvas id="fx-canvas"></canvas>
+          <div id="float-layer"></div>
+          <div id="tutorial-overlay" class="hidden" aria-live="polite">
+            <div id="tutorial-card">
+              <div id="tutorial-step">ADIM 1/2</div>
+              <div id="tutorial-text">Kırmızı bloğu işaretli hücreye sürükleyip bırak.</div>
+            </div>
+          </div>
         </div>
+      </div>
+      <div id="rotate-controls" class="hidden">
+        <button id="rotate-left-btn" type="button">↺</button>
+        <span id="rotate-controls-label">Bloğu seç ve döndür</span>
+        <button id="rotate-confirm-btn" type="button">✓</button>
+        <button id="rotate-right-btn" type="button">↻</button>
       </div>
       <div id="tray">
         <canvas id="block0" class="block-preview" data-idx="0"></canvas>
@@ -137,6 +258,13 @@
               <input type="range" id="sfx-volume-slider" min="0" max="100" step="1" value="70" />
               <span id="sfx-volume-val">70%</span>
             </div>
+          </div>
+          <div class="settings-row">
+            <span class="settings-label">El Modu</span>
+            <select id="hand-mode-select" class="settings-select">
+              <option value="right">Sağ El</option>
+              <option value="left">Sol El</option>
+            </select>
           </div>
         </div>
 

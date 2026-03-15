@@ -3,7 +3,7 @@
  */
 
 import { Grid }                        from './grid.js';
-import { generateTray, Block, COLORS as PALETTE } from './blocks.js';
+import { generateTray, Block, SHAPES, COLORS as PALETTE } from './blocks.js';
 import { Renderer }          from './renderer.js';
 import { runClearingLogic }  from './clearing.js';
 import { ScoreSystem }       from './score.js';
@@ -14,18 +14,34 @@ import { POWERUPS, MarketStore } from './market.js';
 import { playPlace, playClear, playCluster, playMega, setSfxVolume, getSfxVolume } from './sounds.js';
 import {
   googleSignIn, googleSignOut, onAuthChange,
-  loadCloudSave, saveCloudSave, applyBonusIfNeeded,
+  loadCloudSave, saveCloudSave, applyBonusIfNeeded, getFirebaseServices,
 } from './firebase.js';
+import {
+  createMatch, joinMatchByCode, quickMatch,
+  updatePlayerState, finishMatch, cancelMatch, subscribeMatch,
+  serializeBoard, drawMiniBoard, nextVsBlock, SeededRng,
+} from './vs.js';
 import { t, setLang, getLang, AVAILABLE_LANGS } from './i18n.js';
 import { initAds, showRewardedAd } from './ads.js';
 
 const TRAY_SIZE      = 4;
 const HARD_EVERY     = 5;
 const SCORE_PER_COIN = 1000;
+const TUTORIAL_KEY   = 'weaverTutorialDone';
+const TUTORIAL_TOTAL_STEPS = 4;
+const CLEAN_BONUS_POINTS = 500;
+
+const COLOR_STEPS = [
+  { maxScore: 2000, colors: 4 },
+  { maxScore: 5000, colors: 5 },
+  { maxScore: 9000, colors: 6 },
+  { maxScore: 14000, colors: 7 },
+  { maxScore: Infinity, colors: 8 },
+];
 
 // ── Layout ──────────────────────────────────────────────────────────────────
 
-const LAYOUT = { NAV: 56, HEADER: 50, TRAY: 86, PAD: 14 };
+const LAYOUT = { NAV: 56, HEADER: 56, TRAY: 126, PAD: 14 };
 
 function computeGridSize() {
   const { NAV, HEADER, TRAY, PAD } = LAYOUT;
@@ -56,6 +72,9 @@ let game      = null;
 const ANIM_KEY       = 'weaverAnimations';
 const _getAnimEnabled = () => localStorage.getItem(ANIM_KEY) !== 'false';
 const _setAnimEnabled = v  => localStorage.setItem(ANIM_KEY, String(v));
+const HAND_KEY = 'weaverHandMode';
+const _getHandMode = () => localStorage.getItem(HAND_KEY) || 'right';
+const _setHandMode = v => localStorage.setItem(HAND_KEY, v === 'left' ? 'left' : 'right');
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 
@@ -71,6 +90,14 @@ const buyRandomBtn = _el('buy-random-btn');
 const skinsGrid    = _el('skins-grid');
 const marketGrid   = _el('market-grid');
 const powerupHint  = _el('powerup-hint');
+const tutorialOverlay = _el('tutorial-overlay');
+const tutorialStepEl  = _el('tutorial-step');
+const tutorialTextEl  = _el('tutorial-text');
+const rotateControls  = _el('rotate-controls');
+const rotateLeftBtn   = _el('rotate-left-btn');
+const rotateRightBtn  = _el('rotate-right-btn');
+const rotateConfirmBtn= _el('rotate-confirm-btn');
+const rotateLabelEl   = _el('rotate-controls-label');
 
 // Reveal overlay elements
 const _revealOverlay = _el('skin-reveal-overlay');
@@ -80,6 +107,12 @@ const _revealName    = _el('skin-reveal-name');
 const _revealTitle   = _el('skin-reveal-title');
 const _revealResult  = _el('skin-reveal-result');
 const _revealClose   = _el('skin-reveal-close');
+
+function _requestImmersiveMode() {
+  const root = document.documentElement;
+  if (document.fullscreenElement || !root?.requestFullscreen) return;
+  root.requestFullscreen().catch(() => {});
+}
 
 // Apply i18n to static labels
 function applyTranslations() {
@@ -155,7 +188,11 @@ function showPage(name) {
 
 document.querySelectorAll('.nav-btn[data-page]').forEach(btn => {
   btn.addEventListener('click', () => {
-    if (btn.dataset.page === 'play' && !game) game = new Game();
+    if (btn.dataset.page === 'play') {
+      if (!game) game = new Game({ mode: 'endless' });
+      else if (game._mode !== 'endless') game.restart({ mode: 'endless' });
+    }
+    if (btn.dataset.page === 'play') _requestImmersiveMode();
     showPage(btn.dataset.page);
   });
 });
@@ -168,14 +205,388 @@ _el('nav-menu-btn').addEventListener('click', () => {
   _updateStartScreen();
 });
 
-// ── Start button ──────────────────────────────────────────────────────────────
+// ── Start button → show mode selection sheet ────────────────────────────────
+
+function _updateModeSelectUI() {
+  const vsBtn = _el('mode-vs-btn');
+  const vsTag = _el('mode-vs-tag');
+  if (!vsBtn || !vsTag) return;
+  const signedIn = !!_currentUser;
+  vsBtn.disabled = !signedIn;
+  if (signedIn) {
+    vsTag.textContent = 'ONLINE';
+    vsTag.className = 'mode-card-tag';
+  } else {
+    vsTag.textContent = 'GİRİŞ YAP';
+    vsTag.className = 'mode-card-tag mode-card-tag--locked';
+  }
+}
 
 _el('start-btn').addEventListener('click', () => {
+  _updateModeSelectUI();
+  _el('mode-select-overlay').classList.remove('hidden');
+});
+
+// Close sheet on backdrop tap
+_el('mode-select-backdrop').addEventListener('click', () => {
+  _el('mode-select-overlay').classList.add('hidden');
+});
+
+// Endless mode
+_el('mode-endless-btn').addEventListener('click', () => {
+  _el('mode-select-overlay').classList.add('hidden');
+  _requestImmersiveMode();
   _setVisible(startScreen, false);
   _setVisible(mainApp, true);
-  if (!game) game = new Game();
+  if (!game) game = new Game({ mode: 'endless' });
+  else if (game._mode !== 'endless') game.restart({ mode: 'endless' });
   showPage('play');
 });
+
+// 1v1 VS mode
+_el('mode-vs-btn').addEventListener('click', () => {
+  _el('mode-select-overlay').classList.add('hidden');
+  vsSession.openLobby();
+});
+
+// ── VS Session ───────────────────────────────────────────────────────────────
+
+const vsSession = (() => {
+  let _matchId   = null;
+  let _role      = null;   // 'host' | 'guest'
+  let _seed      = null;
+  let _rng       = null;
+  let _unsubMatch = null;
+  let _syncInterval = null;
+  let _matchData = null;
+  let _oppName   = 'Rakip';
+  let _myFinalScore = 0;
+  let _countdownStarted = false;
+  let _gameLaunched = false;
+
+  const _overlay = () => _el('vs-overlay');
+  const _screen  = id => _el(id);
+
+  function _showScreen(id) {
+    ['vs-screen-choose','vs-screen-waiting','vs-screen-countdown','vs-screen-result']
+      .forEach(s => _el(s).classList.toggle('hidden', s !== id));
+  }
+
+  function _setWaitingScreen(mode, inviteCode = '') {
+    const labelEl = _el('vs-invite-code-label');
+    const codeEl  = _el('vs-invite-code');
+    const copyEl  = _el('vs-copy-code-btn');
+    const hintEl  = _el('vs-wait-hint');
+    const isPrivate = mode === 'private';
+
+    labelEl?.classList.toggle('hidden', !isPrivate);
+    codeEl?.classList.toggle('hidden', !isPrivate);
+    copyEl?.classList.toggle('hidden', !isPrivate);
+
+    if (isPrivate) {
+      if (codeEl) codeEl.textContent = inviteCode || '------';
+      if (hintEl) hintEl.textContent = 'Arkadaşın katılınca oyun başlayacak';
+    } else {
+      if (hintEl) hintEl.textContent = 'Uygun rakip aranıyor. Biri bulununca oyun başlayacak';
+    }
+  }
+
+  function openLobby() {
+    _showScreen('vs-screen-choose');
+    _overlay().classList.remove('hidden');
+    _el('vs-code-input').value = '';
+    _setWaitingScreen('private');
+  }
+
+  function _closeLobby() {
+    _overlay().classList.add('hidden');
+    _stopSync();
+  }
+
+  function _stopSync() {
+    if (_unsubMatch) { _unsubMatch(); _unsubMatch = null; }
+    clearInterval(_syncInterval); _syncInterval = null;
+    _countdownStarted = false;
+    _gameLaunched = false;
+  }
+
+  // ── Countdown then launch ──────────────────────────────────────────────────
+
+  function _startCountdown(matchData) {
+    if (_countdownStarted) return;
+    _countdownStarted = true;
+    _matchData = matchData;
+    const isHost = _role === 'host';
+    const me     = matchData.host;
+    const opp    = matchData.guest;
+    _oppName = (isHost ? opp?.name : me?.name) || 'Rakip';
+
+    _el('vs-my-name').textContent  = _currentUser.displayName || 'Sen';
+    _el('vs-opp-name').textContent = _oppName;
+    _showScreen('vs-screen-countdown');
+
+    let n = 3;
+    const _tick = () => {
+      const el = _el('vs-countdown-num');
+      el.textContent = n > 0 ? String(n) : 'GO!';
+      // Re-trigger animation by clone trick
+      const clone = el.cloneNode(true);
+      el.parentNode.replaceChild(clone, el);
+      if (n > 0) { n--; setTimeout(_tick, 900); }
+      else setTimeout(_launchVsGame, 700);
+    };
+    _tick();
+  }
+
+  // ── Launch VS game ─────────────────────────────────────────────────────────
+
+  function _launchVsGame() {
+    if (_gameLaunched) return;
+    _gameLaunched = true;
+    _overlay().classList.add('hidden');
+    _requestImmersiveMode();
+    _setVisible(startScreen, false);
+    _setVisible(mainApp, true);
+
+    _rng = new SeededRng(_seed);
+
+    if (!game) game = new Game({ mode: 'vs' });
+    else game.restart({ mode: 'vs' });
+
+    // Enable VS mode on the game
+    game._vsMode = true;
+    game._vsRole = _role;
+    game._vsRng  = _rng;
+
+    // Show opponent panel
+    const oppPanel = _el('vs-opp-panel');
+    _el('vs-opp-panel-name').textContent  = _oppName;
+    _el('vs-opp-panel-score').textContent = '0';
+    _el('vs-opp-gameover').classList.add('hidden');
+    oppPanel.classList.remove('hidden');
+
+    // Draw empty mini board
+    const oc = _el('vs-opp-canvas');
+    drawMiniBoard(oc.getContext('2d'), '0'.repeat(64), oc.width, oc.height);
+
+    showPage('play');
+
+    // Mark match as active so both players know it started
+    if (_matchId) {
+      getFirebaseServices().then(s =>
+        s.updateDoc(s.doc(s.db, 'matches', _matchId), { status: 'active' })
+      ).catch(() => {});
+    }
+
+    // Start syncing my state every 1.5s
+    _syncInterval = setInterval(() => {
+      if (!game || !_matchId) return;
+      const board = serializeBoard(game.grid);
+      updatePlayerState(_matchId, _role, {
+        score:    game.scoreSystem.score,
+        gameOver: game._isGameOver ?? false,
+        board,
+      }).catch(() => {});
+    }, 1500);
+  }
+
+  // ── Handle incoming match snapshot ────────────────────────────────────────
+
+  function _onMatchSnapshot(data) {
+    _matchData = data;
+
+    if (data.status === 'countdown') {
+      _startCountdown(data);
+    }
+
+    if (data.status === 'active' && !_gameLaunched) {
+      _launchVsGame();
+    }
+
+    if (data.status === 'cancelled') {
+      _stopSync();
+      _overlay().classList.add('hidden');
+      showToast('Rakip bağlantıyı kesti.');
+      _exitToMenu();
+      return;
+    }
+
+    // Update opponent panel during game
+    if (data.status === 'active' || data.status === 'countdown') {
+      const oppState = _role === 'host' ? data.guestState : data.hostState;
+      if (oppState) {
+        _el('vs-opp-panel-score').textContent = (oppState.score ?? 0).toLocaleString();
+        const oc = _el('vs-opp-canvas');
+        if (oc && oppState.board) drawMiniBoard(oc.getContext('2d'), oppState.board, oc.width, oc.height);
+        if (oppState.gameOver) _el('vs-opp-gameover').classList.remove('hidden');
+      }
+    }
+
+    // Both game-over → show result
+    if (data.status === 'finished') {
+      _stopSync();
+      _showResult(data);
+    }
+  }
+
+  // ── Report local game over ─────────────────────────────────────────────────
+
+  function reportGameOver(myScore) {
+    _myFinalScore = myScore;
+    if (!_matchId) return;
+    const board = game ? serializeBoard(game.grid) : '0'.repeat(64);
+    updatePlayerState(_matchId, _role, { score: myScore, gameOver: true, board }).catch(() => {});
+
+    // Check if opponent already game-over → determine winner
+    const oppState = _role === 'host' ? _matchData?.guestState : _matchData?.hostState;
+    if (oppState?.gameOver) {
+      const oppScore = oppState.score ?? 0;
+      const winner   = myScore >= oppScore ? _currentUser.uid : (
+        _role === 'host' ? _matchData?.guest?.uid : _matchData?.host?.uid
+      );
+      finishMatch(_matchId, winner ?? 'tie').catch(() => {});
+    }
+    // else wait for opponent's game-over
+  }
+
+  // ── Show result screen ─────────────────────────────────────────────────────
+
+  function _showResult(data) {
+    _el('vs-opp-panel').classList.add('hidden');
+    const myUid  = _currentUser?.uid;
+    const isWin  = data.winner === myUid;
+    const isTie  = data.winner === 'tie';
+
+    _el('vs-result-icon').textContent  = isTie ? '🤝' : isWin ? '🏆' : '😢';
+    _el('vs-result-title').textContent = isTie ? 'BERABERLIK' : isWin ? 'KAZANDIN!' : 'KAYBETTİN!';
+
+    const myState  = _role === 'host' ? data.hostState  : data.guestState;
+    const oppState = _role === 'host' ? data.guestState : data.hostState;
+    _el('vs-my-final-score').textContent  = (myState?.score  ?? 0).toLocaleString();
+    _el('vs-opp-final-score').textContent = (oppState?.score ?? 0).toLocaleString();
+
+    _overlay().classList.remove('hidden');
+    _showScreen('vs-screen-result');
+  }
+
+  function _exitToMenu() {
+    _el('vs-opp-panel').classList.add('hidden');
+    _setVisible(mainApp, false);
+    _setVisible(startScreen, true);
+    _updateStartScreen();
+    if (game) { game._vsMode = false; game._isGameOver = false; }
+  }
+
+  // ── Listeners ──────────────────────────────────────────────────────────────
+
+  // Back button on choose screen
+  _el('vs-back-btn').addEventListener('click', () => _closeLobby());
+
+  // Quick match
+  _el('vs-quick-btn').addEventListener('click', async () => {
+    if (!_currentUser) return;
+    _el('vs-quick-btn').disabled = true;
+    try {
+      _countdownStarted = false;
+      _gameLaunched = false;
+      const result = await quickMatch(_currentUser);
+      _matchId = result.matchId;
+      _seed    = result.seed;
+      _role    = result.role;
+
+      _unsubMatch = subscribeMatch(_matchId, _onMatchSnapshot);
+
+      if (_role === 'guest') {
+        _showScreen('vs-screen-countdown');
+        _el('vs-countdown-num').textContent = '...';
+      } else {
+        _setWaitingScreen('public');
+        _showScreen('vs-screen-waiting');
+      }
+    } catch (err) {
+      showToast('Hata: ' + (err.message || String(err)));
+    } finally {
+      _el('vs-quick-btn').disabled = false;
+    }
+  });
+
+  // Create match (invite code)
+  _el('vs-create-btn').addEventListener('click', async () => {
+    if (!_currentUser) return;
+    _el('vs-create-btn').disabled = true;
+    try {
+      _countdownStarted = false;
+      _gameLaunched = false;
+      const result = await createMatch(_currentUser);
+      _matchId = result.matchId;
+      _seed    = result.seed;
+      _role    = 'host';
+
+      _setWaitingScreen('private', result.inviteCode);
+      _showScreen('vs-screen-waiting');
+
+      _unsubMatch = subscribeMatch(_matchId, _onMatchSnapshot);
+    } catch (err) {
+      showToast('Hata: ' + (err.message || String(err)));
+    } finally {
+      _el('vs-create-btn').disabled = false;
+    }
+  });
+
+  // Cancel waiting
+  _el('vs-cancel-wait-btn').addEventListener('click', async () => {
+    if (_matchId) await cancelMatch(_matchId).catch(() => {});
+    _stopSync();
+    _matchId = null;
+    _showScreen('vs-screen-choose');
+  });
+
+  // Copy invite code
+  _el('vs-copy-code-btn').addEventListener('click', () => {
+    const code = _el('vs-invite-code').textContent;
+    navigator.clipboard?.writeText(code).catch(() => {});
+    showToast('Kod kopyalandı!');
+  });
+
+  // Join by code
+  _el('vs-join-btn').addEventListener('click', async () => {
+    const code = _el('vs-code-input').value.trim().toUpperCase();
+    if (code.length < 6) { showToast('6 karakterli kod gir.'); return; }
+    if (!_currentUser) return;
+    _el('vs-join-btn').disabled = true;
+    try {
+      _countdownStarted = false;
+      _gameLaunched = false;
+      const result = await joinMatchByCode(code, _currentUser);
+      _matchId = result.matchId;
+      _seed    = result.seed;
+      _role    = 'guest';
+      _unsubMatch = subscribeMatch(_matchId, _onMatchSnapshot);
+      _showScreen('vs-screen-countdown');
+      _el('vs-countdown-num').textContent = '...';
+    } catch (err) {
+      showToast('Hata: ' + (err.message || String(err)));
+    } finally {
+      _el('vs-join-btn').disabled = false;
+    }
+  });
+
+  // Rematch
+  _el('vs-rematch-btn').addEventListener('click', () => {
+    _overlay().classList.add('hidden');
+    _stopSync();
+    _matchId = null;
+    openLobby();
+  });
+
+  // Exit to main menu
+  _el('vs-exit-btn').addEventListener('click', () => {
+    _closeLobby();
+    _exitToMenu();
+  });
+
+  return { openLobby, reportGameOver };
+})();
 
 // ── Settings button ───────────────────────────────────────────────────────────
 
@@ -189,6 +600,7 @@ _el('ss-settings-btn').addEventListener('click', () => {
 // ── Restart ───────────────────────────────────────────────────────────────────
 
 _el('restart-btn').addEventListener('click', () => {
+  _requestImmersiveMode();
   overlayEl.classList.add('hidden');
   game.restart();
   showPage('play');
@@ -269,6 +681,9 @@ function _applyAuthUI(user) {
     _el('ss-avatar').src              = _avatarUrl(user.photoURL);
     _el('ss-username').textContent    = user.displayName || user.email;
   }
+
+  // Mode select sheet VS button state
+  _updateModeSelectUI();
 
   // Settings panel
   const out = _el('settings-signed-out');
@@ -412,6 +827,15 @@ function renderSettingsPage() {
   if (animToggle) {
     animToggle.checked  = _getAnimEnabled();
     animToggle.onchange = () => _setAnimEnabled(animToggle.checked);
+  }
+
+  const handSelect = _el('hand-mode-select');
+  if (handSelect) {
+    handSelect.value = _getHandMode();
+    handSelect.onchange = () => {
+      _setHandMode(handSelect.value);
+      if (game?.renderer) game.renderer.setHandedness(_getHandMode());
+    };
   }
 
   _applyAuthUI(_currentUser);
@@ -692,6 +1116,32 @@ function showToast(msg, { error = false } = {}) {
   }, error ? 4000 : 1500);
 }
 
+function showGainFloat({ scoreDelta = 0, coins = 0 }) {
+  if (!scoreDelta && !coins) return;
+  const layer = _el('float-layer');
+  if (!layer) return;
+
+  const el = document.createElement('div');
+  el.className = 'reward-gain-float';
+
+  const scorePart = document.createElement('span');
+  scorePart.className = 'reward-score';
+  scorePart.textContent = `+${Math.round(scoreDelta).toLocaleString()}`;
+  el.appendChild(scorePart);
+
+  if (coins > 0) {
+    const coinPart = document.createElement('span');
+    coinPart.className = 'reward-coins';
+    coinPart.textContent = `+${coins} 🪙`;
+    el.appendChild(coinPart);
+  }
+
+  el.style.left = '50%';
+  el.style.top = '52%';
+  layer.appendChild(el);
+  setTimeout(() => el.remove(), 1250);
+}
+
 // ── Market page ───────────────────────────────────────────────────────────────
 
 function _makeMarketItem(pu) {
@@ -780,12 +1230,139 @@ function _renderCoinPacks() {
   COIN_PACKS.forEach(pack => grid.appendChild(_makeCoinPack(pack)));
 }
 
+function _colorCapForScore(score) {
+  for (const step of COLOR_STEPS)
+    if (score <= step.maxScore) return step.colors;
+  return 8;
+}
+
+function _luckyChanceForScore(score) {
+  if (score < 1500) return 0.09;
+  if (score < 4500) return 0.14;
+  if (score < 9000) return 0.19;
+  if (score < 15000) return 0.24;
+  return 0.28;
+}
+
+function _fitsShapeAt(grid, shapeCells, row, col) {
+  const positions = shapeCells.map(([dr, dc]) => ({ row: row + dr, col: col + dc }));
+  return grid.canPlace(positions) ? positions : null;
+}
+
+function _chooseLuckyColor(grid, positions, maxColor) {
+  const counts = new Map();
+  for (const { row, col } of positions) {
+    const neigh = [[-1,0],[1,0],[0,-1],[0,1]];
+    for (const [dr, dc] of neigh) {
+      const r = row + dr, c = col + dc;
+      if (!grid.isInBounds(r, c)) continue;
+      const cell = grid.get(r, c);
+      if (cell?.isEmpty) continue;
+      if (cell.colorID <= maxColor)
+        counts.set(cell.colorID, (counts.get(cell.colorID) ?? 0) + 1);
+    }
+  }
+  let best = 1, bestCount = -1;
+  for (const [cid, cnt] of counts) {
+    if (cnt > bestCount) { bestCount = cnt; best = cid; }
+  }
+  if (bestCount >= 0) return best;
+  return 1 + Math.floor(Math.random() * maxColor);
+}
+
+function _evaluateLuckyPlacement(grid, positions) {
+  const rows = new Set();
+  const cols = new Set();
+  for (const p of positions) { rows.add(p.row); cols.add(p.col); }
+  let nearLine = 0;
+  for (const r of rows) {
+    let filled = 0;
+    for (let c = 0; c < Grid.SIZE; c++) {
+      const willFill = positions.some(p => p.row === r && p.col === c);
+      const occupied = willFill || !grid.get(r, c).isEmpty;
+      if (occupied) filled++;
+    }
+    if (filled === Grid.SIZE) nearLine += 16;
+    else nearLine += filled;
+  }
+  for (const c of cols) {
+    let filled = 0;
+    for (let r = 0; r < Grid.SIZE; r++) {
+      const willFill = positions.some(p => p.row === r && p.col === c);
+      const occupied = willFill || !grid.get(r, c).isEmpty;
+      if (occupied) filled++;
+    }
+    if (filled === Grid.SIZE) nearLine += 16;
+    else nearLine += filled;
+  }
+  return nearLine + positions.length * 1.4;
+}
+
+function _findLuckyBlock(grid, maxColor) {
+  let best = null;
+  const entries = Object.entries(SHAPES);
+  for (const [shapeKey, shape] of entries) {
+    if (shape.size > 5) continue;
+    for (let row = 0; row < Grid.SIZE; row++) {
+      for (let col = 0; col < Grid.SIZE; col++) {
+        const positions = _fitsShapeAt(grid, shape.cells, row, col);
+        if (!positions) continue;
+        const score = _evaluateLuckyPlacement(grid, positions);
+        if (!best || score > best.score) {
+          best = { shapeKey, positions, score };
+        }
+      }
+    }
+  }
+  if (!best) return null;
+  const colorID = _chooseLuckyColor(grid, best.positions, maxColor);
+  return new Block(best.shapeKey, colorID);
+}
+
+function _normalizeCells(cells) {
+  const minR = Math.min(...cells.map(c => c[0]));
+  const minC = Math.min(...cells.map(c => c[1]));
+  return cells.map(([r, c]) => [r - minR, c - minC]);
+}
+
+function _rotateCells(cells, dir = 'cw') {
+  const maxR = Math.max(...cells.map(c => c[0]));
+  const maxC = Math.max(...cells.map(c => c[1]));
+  const rotated = dir === 'ccw'
+    ? cells.map(([r, c]) => [maxC - c, r])
+    : cells.map(([r, c]) => [c, maxR - r]);
+  return _normalizeCells(rotated);
+}
+
+function _makeRotatedBlock(base, cells) {
+  const norm = _normalizeCells(cells);
+  const size = norm.length;
+  return {
+    id: base.id,
+    shapeKey: `${base.shapeKey}_rot`,
+    colorID: base.colorID,
+    cells: norm,
+    size,
+    getAbsolutePositions(anchorRow, anchorCol) {
+      return this.cells.map(([dr, dc]) => ({ row: anchorRow + dr, col: anchorCol + dc }));
+    },
+    getBoundingBox() {
+      const rows = this.cells.map(([r]) => r);
+      const cols = this.cells.map(([, c]) => c);
+      return {
+        rows: Math.max(...rows) + 1,
+        cols: Math.max(...cols) + 1,
+      };
+    }
+  };
+}
+
 // ╔══════════════════════════════════════════════════════════════════════════╗
 // ║  Game                                                                    ║
 // ╚══════════════════════════════════════════════════════════════════════════╝
 
 class Game {
-  constructor() {
+  constructor({ mode = 'endless' } = {}) {
     this.grid        = new Grid();
     this.scoreSystem = new ScoreSystem();
     this.particles   = new ParticleSystem();
@@ -802,6 +1379,7 @@ class Game {
     });
 
     this.renderer = new Renderer(this.grid, gridCanvas, fxCanvas);
+    this.renderer.setHandedness(_getHandMode());
     this.renderer.setSkin(economy.getActiveSkin());
     this._syncCellMetrics();
 
@@ -810,6 +1388,26 @@ class Game {
     this.placements = 0;
     this._coinMilestone    = 0;
     this._coinsAtGameStart = economy.coins;
+    this._colorCap = _colorCapForScore(0);
+    this._mode = mode;
+
+    // VS mode state
+    this._vsMode     = mode === 'vs';
+    this._vsRole     = null;
+    this._vsRng      = null;
+    this._isGameOver = false;
+
+    this._tutorial = {
+      active: mode === 'endless' && localStorage.getItem(TUTORIAL_KEY) !== '1',
+      step: 0,
+      target: null,
+      expectedShape: '',
+      expectedColor: 0,
+    };
+    this._rotateMode = {
+      active: false,
+      selectedIdx: -1,
+    };
 
     // UI refs
     this.scoreEl = _el('score-display');
@@ -823,16 +1421,29 @@ class Game {
       this.scoreEl.textContent = ss.score.toLocaleString();
       this.bestEl.textContent  = ss.best.toLocaleString();
       this.comboEl.textContent = `x${ss.comboMultiplier}`;
-      this._checkCoins(ss.score);
+      this._updateComboVisual(ss.comboMultiplier);
+      this._updateColorCap(ss.score);
     });
+    this._updateComboVisual(1);
 
     this.renderer.onDrop = (block, el, row, col) => this._handleDrop(block, el, row, col);
     this.renderer.setBlockProvider(idx => this.tray[idx] ?? null);
 
+    if (rotateLeftBtn) {
+      rotateLeftBtn.onclick = () => this._rotateSelectedBlock('ccw');
+    }
+    if (rotateRightBtn) {
+      rotateRightBtn.onclick = () => this._rotateSelectedBlock('cw');
+    }
+    if (rotateConfirmBtn) {
+      rotateConfirmBtn.onclick = () => this._finishRotateMode();
+    }
+
     // Handle orientation / resize
     window.addEventListener('resize', () => this._handleResize());
 
-    this._dealTray();
+    if (this._tutorial.active) this._startTutorial();
+    else this._dealTray();
     this._loop(performance.now());
   }
 
@@ -858,6 +1469,186 @@ class Game {
     return snap;
   }
 
+  _updateColorCap(score) {
+    const nextCap = _colorCapForScore(score);
+    if (nextCap <= this._colorCap) return;
+    this._colorCap = nextCap;
+    showToast(`Yeni renk açıldı! Artık ${nextCap} renk aktif.`);
+  }
+
+  _setTutorialUI(step, text) {
+    _setVisible(tutorialOverlay, true);
+    if (tutorialStepEl) tutorialStepEl.textContent = `ADIM ${step}/${TUTORIAL_TOTAL_STEPS}`;
+    if (tutorialTextEl) tutorialTextEl.textContent = text;
+  }
+
+  _startTutorial() {
+    this.grid.reset();
+    this.scoreSystem.reset();
+    this.particles._particles = [];
+    this.placements = 0;
+    this._setupTutorialStep1();
+  }
+
+  _setupTutorialStep1() {
+    this._tutorial.active = true;
+    this._tutorial.step = 1;
+    this._tutorial.target = { row: 3, col: 3 };
+    this._tutorial.expectedShape = 'DOT';
+    this._tutorial.expectedColor = 1;
+    this._setTutorialUI(1, 'Kirmizi tekli blogu isaretli hucreye birak. Renk birikimi ile patlama olur.');
+
+    this.grid.reset();
+    const cells = [
+      { row: 2, col: 2 }, { row: 2, col: 3 }, { row: 2, col: 4 },
+      { row: 3, col: 2 },                     { row: 3, col: 4 },
+      { row: 4, col: 2 }, { row: 4, col: 3 }, { row: 4, col: 4 },
+      { row: 1, col: 3 },
+    ];
+    this.grid.fillMany(cells, 1, 'tutorial_seed_cluster');
+
+    this.tray = [new Block('DOT', 1), null, null, null];
+    this.usedMask = [false, true, true, true];
+    this._renderTray();
+  }
+
+  _setupTutorialStep2() {
+    this._tutorial.step = 2;
+    this._tutorial.target = { row: 5, col: 4 };
+    this._tutorial.expectedShape = 'DOT';
+    this._tutorial.expectedColor = 2;
+    this._setTutorialUI(2, 'Bu kez satiri tamamla. Isaretli bosluga birak ve line clear yap.');
+
+    this.grid.reset();
+    const rowCells = [];
+    for (let c = 0; c < Grid.SIZE; c++) {
+      if (c === 4) continue;
+      const color = (c % 4) + 1;
+      rowCells.push({ row: 5, col: c, color });
+    }
+    for (const rc of rowCells)
+      this.grid.fillMany([{ row: rc.row, col: rc.col }], rc.color, 'tutorial_seed_line');
+
+    this.tray = [new Block('DOT', 2), null, null, null];
+    this.usedMask = [false, true, true, true];
+    this._renderTray();
+  }
+
+  _finishTutorial() {
+    this._tutorial.active = false;
+    this._tutorial.step = 0;
+    this._tutorial.target = null;
+    _setVisible(tutorialOverlay, false);
+    localStorage.setItem(TUTORIAL_KEY, '1');
+    showToast('Harika! Artik normal oyundasin.');
+    this._dealTray();
+  }
+
+  _drawTutorialTarget(now) {
+    if (!this._tutorial.active || !this._tutorial.target) return;
+    const { row, col } = this._tutorial.target;
+    const x = this.renderer.PADDING + col * (this.renderer.CELL + this.renderer.GAP);
+    const y = this.renderer.PADDING + row * (this.renderer.CELL + this.renderer.GAP);
+    const sz = this.renderer.CELL;
+    const ctx = this.renderer.fxCtx;
+    const pulse = 0.55 + (Math.sin(now / 180) + 1) * 0.2;
+
+    ctx.save();
+    ctx.strokeStyle = `rgba(196,181,253,${pulse})`;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x - 2, y - 2, sz + 4, sz + 4);
+    ctx.fillStyle = `rgba(196,181,253,${0.15 + pulse * 0.12})`;
+    ctx.fillRect(x, y, sz, sz);
+    ctx.restore();
+  }
+
+  _isTutorialDropValid(block, row, col) {
+    if (!this._tutorial.active) return true;
+    const target = this._tutorial.target;
+    const okCell = target && row === target.row && col === target.col;
+    const okShape = block.shapeKey === this._tutorial.expectedShape;
+    const okColor = block.colorID === this._tutorial.expectedColor;
+    if (!okCell || !okShape || !okColor) {
+      showToast('Bu adim icin isaretli yere birakmalisin.');
+      return false;
+    }
+    return true;
+  }
+
+  _handleTutorialAfterClear(result) {
+    if (!this._tutorial.active) return;
+    if (this._tutorial.step === 1) {
+      if (result.colorClusters.length > 0) {
+        showToast('Super! Simdi satir temizleme adimi.');
+        setTimeout(() => this._setupTutorialStep2(), 450);
+      }
+      return;
+    }
+    if (this._tutorial.step === 2) {
+      if (result.clearedRows.length > 0 || result.clearedCols.length > 0) {
+        this._tutorial.step = 3;
+        this._setTutorialUI(3, 'Bazen sansli bir blok gelir. Ekranda LUCKY gorursen tabloya en faydali sekil gelmistir.');
+        setTimeout(() => {
+          if (!this._tutorial.active) return;
+          this._tutorial.step = 4;
+          this._setTutorialUI(4, 'Tek bir hamlede tum tablo temizlenirse CLEAN olur, ekstra puan kazanirsin.');
+          setTimeout(() => this._finishTutorial(), 2200);
+        }, 2200);
+      }
+    }
+  }
+
+  _enterRotateMode() {
+    const first = this.tray.findIndex(Boolean);
+    if (first === -1) {
+      // No block to rotate: refund one charge.
+      market._inv.rotate_block = (market._inv.rotate_block ?? 0) + 1;
+      market._save();
+      showToast('Elde blok yok. Hak iade edildi.');
+      return;
+    }
+
+    this._rotateMode.active = true;
+    this._rotateMode.selectedIdx = first;
+    this.renderer.setDragEnabled(false);
+    _setVisible(rotateControls, true);
+    if (rotateLabelEl) rotateLabelEl.textContent = 'Blok sec, saga/sola dondur, onayla';
+    powerupHint.textContent = '🔄 Donusturulecek blok sec';
+    powerupHint.classList.remove('hidden');
+    this._renderTray();
+  }
+
+  _finishRotateMode() {
+    if (!this._rotateMode.active) return;
+    this._rotateMode.active = false;
+    this._rotateMode.selectedIdx = -1;
+    this.renderer.setDragEnabled(true);
+    _setVisible(rotateControls, false);
+    powerupHint.classList.add('hidden');
+    this._renderTray();
+  }
+
+  _selectRotateTarget(idx) {
+    if (!this._rotateMode.active) return;
+    if (!this.tray[idx]) return;
+    this._rotateMode.selectedIdx = idx;
+    this._renderTray();
+  }
+
+  _rotateSelectedBlock(dir = 'cw') {
+    if (!this._rotateMode.active) return;
+    const idx = this._rotateMode.selectedIdx;
+    const block = this.tray[idx];
+    if (!block) return;
+    if (block.cells.length <= 1) {
+      showToast('Tekli blok donmez.');
+      return;
+    }
+    const nextCells = _rotateCells(block.cells, dir);
+    this.tray[idx] = _makeRotatedBlock(block, nextCells);
+    this._renderTray();
+  }
+
   // ── Coin earning ──────────────────────────────────────────────────────────
 
   _checkCoins(score) {
@@ -867,15 +1658,45 @@ class Game {
       this._coinMilestone = milestone;
       economy.addCoins(earned);
       updateCoinDisplays();
-      showToast(`+${earned} \uD83E\uDE99`);
     }
+    return Math.max(0, earned);
+  }
+
+  _updateComboVisual(mult) {
+    const m = Math.max(1, Math.min(10, mult));
+    const t = (m - 1) / 9;
+    const hue = 130 - t * 122; // green -> red
+    const color = `hsl(${hue}, 90%, 56%)`;
+    this.comboEl.style.setProperty('--combo-color', color);
+    this.comboEl.style.textShadow = `0 0 8px hsla(${hue}, 95%, 56%, 0.45)`;
+    this.comboEl.classList.toggle('combo-hot', m >= 5);
+    this.comboEl.classList.toggle('combo-burn', m >= 7);
   }
 
   // ── Tray ───────────────────────────────────────────────────────────────────
 
   _dealTray() {
+    if (this._vsMode && this._vsRng) {
+      // VS mode: use shared seeded RNG — same block sequence for both players, no Lucky
+      this.tray = Array.from({ length: TRAY_SIZE }, () =>
+        nextVsBlock(this._vsRng, this._colorCap));
+      this.usedMask = new Array(TRAY_SIZE).fill(false);
+      this._renderTray();
+      if (isGameOver(this.tray.filter(Boolean), this.grid))
+        setTimeout(() => this._gameOver(), 400);
+      return;
+    }
     const hard   = this.placements > 0 && this.placements % HARD_EVERY === 0;
-    this.tray     = generateTray(this.grid, TRAY_SIZE, hard);
+    this.tray     = generateTray(this.grid, TRAY_SIZE, hard, this._colorCap);
+    const luckyChance = _luckyChanceForScore(this.scoreSystem.score);
+    if (!this._tutorial.active && this.placements > 0 && Math.random() < luckyChance) {
+      const lucky = _findLuckyBlock(this.grid, this._colorCap);
+      if (lucky) {
+        const pick = Math.floor(Math.random() * this.tray.length);
+        this.tray[pick] = lucky;
+        showToast('LUCKY! 🍀');
+      }
+    }
     this.usedMask = new Array(TRAY_SIZE).fill(false);
     this._renderTray();
     if (isGameOver(this.tray.filter(Boolean), this.grid))
@@ -883,12 +1704,15 @@ class Game {
   }
 
   _renderTray() {
-    const trayEl = _el('tray');
-
     for (let i = 0; i < this.tray.length; i++) {
       const el = _el(`block${i}`);
       if (!el) continue;
-      el.classList.remove('used', 'dragging');
+      el.classList.remove('used', 'dragging', 'rotate-selected');
+      el.onclick = null;
+      if (this._rotateMode.active && this.tray[i]) {
+        el.onclick = () => this._selectRotateTarget(i);
+        if (this._rotateMode.selectedIdx === i) el.classList.add('rotate-selected');
+      }
       this.renderer.drawBlockPreview(el, this.tray[i]);
     }
   }
@@ -897,12 +1721,16 @@ class Game {
     this.usedMask[idx] = true;
     _el(`block${idx}`).classList.add('used');
     this.tray[idx] = null;
-    if (this.tray.every(b => b === null)) setTimeout(() => this._dealTray(), 300);
+    if (this.tray.every(b => b === null) && !this._tutorial.active)
+      setTimeout(() => this._dealTray(), 300);
   }
 
   // ── Drop ───────────────────────────────────────────────────────────────────
 
   _handleDrop(block, el, row, col) {
+    if (this._rotateMode.active) return;
+    if (!this._isTutorialDropValid(block, row, col)) return;
+
     const positions = block.getAbsolutePositions(row, col);
     if (!this.grid.canPlace(positions)) return;
 
@@ -927,13 +1755,32 @@ class Game {
         colorClusters: result.colorClusters.length,
         now:           performance.now(),
       });
+      let totalGain = delta;
       this.particles.spawnScoreFloat(result.cleared, delta, label, PALETTE, snap);
       // pick sound based on how impressive the clear is
       const hasMega = result.clearedRows.length > 0 && result.clearedCols.length > 0 && result.colorClusters.length > 0;
       if (hasMega)                             playMega();
       else if (result.colorClusters.length)    playCluster();
       else                                     playClear();
+
+      // CLEAN: single placement ended with a fully empty board
+      if (this.grid.getFilledCells().length === 0) {
+        this.scoreSystem.score += CLEAN_BONUS_POINTS;
+        totalGain += CLEAN_BONUS_POINTS;
+        if (this.scoreSystem.score > this.scoreSystem.best) {
+          this.scoreSystem.best = this.scoreSystem.score;
+          localStorage.setItem('weaverBest', this.scoreSystem.best);
+        }
+        this.scoreSystem._emit();
+        this.particles.spawnScoreFloat(result.cleared, CLEAN_BONUS_POINTS, 'CLEAN!', PALETTE, snap);
+        showToast('CLEAN! ✨');
+      }
+
+      const coinsEarned = this._checkCoins(this.scoreSystem.score);
+      showGainFloat({ scoreDelta: totalGain, coins: coinsEarned });
     }
+
+    this._handleTutorialAfterClear(result);
 
     if (this.tray.filter(Boolean).length > 0 && isGameOver(this.tray.filter(Boolean), this.grid))
       setTimeout(() => this._gameOver(), 400);
@@ -951,13 +1798,23 @@ class Game {
       this.particles.tick(dt, this.renderer.fxCtx);
     }
     this.renderer.redrawGhost();
+    this._drawTutorialTarget(now);
     requestAnimationFrame(t => this._loop(t));
   }
 
   // ── Game over ──────────────────────────────────────────────────────────────
 
   _gameOver() {
-    const earned = economy.coins - this._coinsAtGameStart;
+    this._isGameOver = true;
+    this._finishRotateMode();
+
+    // VS mode: report to opponent, show overlay after brief delay, skip normal game-over UI
+    if (this._vsMode) {
+      vsSession.reportGameOver(this.scoreSystem.score);
+      return;
+    }
+
+    const earned = this._coinMilestone; // only gameplay-earned coins, not purchases
     _el('final-score').textContent = this.scoreSystem.score.toLocaleString();
     _el('final-coins').textContent = `+${earned} \uD83E\uDE99`;
     overlayEl.classList.remove('hidden');
@@ -967,15 +1824,29 @@ class Game {
 
   // ── Restart ────────────────────────────────────────────────────────────────
 
-  restart() {
+  restart({ mode = this._mode } = {}) {
+    this._finishRotateMode();
+    this._mode       = mode;
+    this._vsMode     = mode === 'vs';
+    this._vsRole     = null;
+    this._vsRng      = null;
+    this._isGameOver = false;
     this.grid.reset();
     this.scoreSystem.reset();
     this.particles._particles = [];
     this.placements      = 0;
     this._coinMilestone  = 0;
     this._coinsAtGameStart = economy.coins;
+    this._colorCap = _colorCapForScore(0);
+    this._tutorial.active = mode === 'endless' && localStorage.getItem(TUTORIAL_KEY) !== '1';
+    this._tutorial.step = 0;
+    this._tutorial.target = null;
     this.renderer.setSkin(economy.getActiveSkin());
-    this._dealTray();
+    if (this._tutorial.active) this._startTutorial();
+    else {
+      _setVisible(tutorialOverlay, false);
+      this._dealTray();
+    }
   }
 
   // ── Resize ─────────────────────────────────────────────────────────────────
@@ -1001,6 +1872,13 @@ class Game {
   activatePowerup(id) {
     if (!market.use(id)) { showToast('No power-up left!'); return; }
     updateCoinDisplays();
+
+    if (id !== 'rotate_block') this._finishRotateMode();
+
+    if (id === 'rotate_block') {
+      this._enterRotateMode();
+      return;
+    }
 
     if (id === 'color_bomb') {
       // No targeting needed — find most frequent color and clear it
@@ -1138,6 +2016,8 @@ class Game {
       clearedRows: [], clearedCols: [], colorClusters: [],
       now: performance.now(),
     });
+    const coinsEarned = this._checkCoins(this.scoreSystem.score);
+    showGainFloat({ scoreDelta: delta, coins: coinsEarned });
     this.particles.spawnScoreFloat(positions, delta, label, PALETTE, snap);
     playCluster();
     updateCoinDisplays();

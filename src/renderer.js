@@ -53,6 +53,9 @@ export class Renderer {
     this.CELL = 30; this.GAP = 2; this.PADDING = 4; this.RADIUS = 4;
     this.tweens   = new Map();
     this.dragging = null;
+    this._dragProxy = null;
+    this.dragEnabled = true;
+    this._handedness = 'right';
     this.onDrop   = null;
     this._getBlockForIndex = () => null;
     this._ghostState = null; // { block, row, col, canPlace }
@@ -183,7 +186,7 @@ export class Renderer {
    * where `block` can be placed. Searches outward in a spiral up to `maxDist`
    * cells away. Returns {row, col, canPlace} with canPlace=false if nothing fits.
    */
-  _snapToNearest(block, rawRow, rawCol, maxDist = 3) {
+  _snapToNearest(block, rawRow, rawCol, maxDist = 5) {
     // Fast path: exact position fits
     if (rawRow >= 0 && this.grid.canPlace(block.getAbsolutePositions(rawRow, rawCol)))
       return { row: rawRow, col: rawCol, canPlace: true };
@@ -210,36 +213,99 @@ export class Renderer {
     if (!this.dragging) return;
     const bb   = this.dragging.block.getBoundingBox();
     const step = this.CELL + this.GAP;
+    let offX = this.dragging.thumbOffset?.x ?? 0;
+    const offY = this.dragging.thumbOffset?.y ?? 0;
+
+    // Edge compensation: when finger reaches screen side, ease horizontal offset toward 0
+    // so far columns stay reachable (especially rightmost for right-hand mode).
+    const EDGE_PAD = 84;
+    if (offX < 0) {
+      const p = Math.max(0, Math.min(1, (x - (window.innerWidth - EDGE_PAD)) / EDGE_PAD));
+      offX = offX * (1 - p);
+    } else if (offX > 0) {
+      const p = Math.max(0, Math.min(1, (EDGE_PAD - x) / EDGE_PAD));
+      offX = offX * (1 - p);
+    }
 
     const rect   = this.gridCanvas.getBoundingClientRect();
     const scaleX = this.gridCanvas.width  / rect.width;
     const scaleY = this.gridCanvas.height / rect.height;
 
-    // Treat finger as if it were LIFT_PX screen-pixels higher, block centered on finger X.
-    // This keeps the ghost on the grid even when the finger is in the piece tray below.
-    const LIFT_PX = 100;
-    const canvasX = (x - rect.left) * scaleX;
-    const canvasY = (y - rect.top)  * scaleY - LIFT_PX * scaleY;
-    const rawRow  = Math.floor((canvasY - this.PADDING) / step);
+    // Follow finger directly (no lift/no nearest-fit snapping).
+    const canvasX = (x + offX - rect.left) * scaleX;
+    const canvasY = (y + offY - rect.top)  * scaleY;
+    const rawRow  = Math.floor((canvasY - this.PADDING) / step - bb.rows / 2);
     const rawCol  = Math.floor((canvasX - this.PADDING) / step - bb.cols / 2);
 
-    // Always keep ghost visible — clamp to grid bounds, never hide
-    const clampedRow = Math.max(0, Math.min(Grid.SIZE - 1, rawRow));
-    const clampedCol = Math.max(0, Math.min(Grid.SIZE - 1, rawCol));
+    const positions = this.dragging.block.getAbsolutePositions(rawRow, rawCol);
+    const canPlace  = this.grid.canPlace(positions);
 
-    const snap = this._snapToNearest(this.dragging.block, clampedRow, clampedCol);
-    this._lastSnap = snap;
-    this.drawGhostAndHover(this.dragging.block, snap.row, snap.col, snap.canPlace);
+    this._lastSnap = { row: rawRow, col: rawCol, canPlace };
+    this.drawGhostAndHover(this.dragging.block, rawRow, rawCol, canPlace);
+  }
+
+  _ensureDragProxy(block, sourceEl) {
+    this._clearDragProxy();
+    const proxy = document.createElement('canvas');
+    proxy.width = sourceEl.width;
+    proxy.height = sourceEl.height;
+    proxy.style.position = 'fixed';
+    proxy.style.left = '0';
+    proxy.style.top = '0';
+    proxy.style.transform = 'translate(-9999px, -9999px)';
+    proxy.style.pointerEvents = 'none';
+    proxy.style.zIndex = '1200';
+    proxy.style.filter = 'drop-shadow(0 8px 14px rgba(0,0,0,0.35))';
+    proxy.style.opacity = '0.96';
+    document.body.appendChild(proxy);
+    this.drawBlockPreview(proxy, block);
+    this._dragProxy = proxy;
+  }
+
+  _updateDragProxy(x, y) {
+    if (!this._dragProxy) return;
+    let offX = this.dragging?.thumbOffset?.x ?? 0;
+    const offY = this.dragging?.thumbOffset?.y ?? 0;
+
+    // Keep proxy and ghost aligned while compensating near screen edges.
+    const EDGE_PAD = 84;
+    if (offX < 0) {
+      const p = Math.max(0, Math.min(1, (x - (window.innerWidth - EDGE_PAD)) / EDGE_PAD));
+      offX = offX * (1 - p);
+    } else if (offX > 0) {
+      const p = Math.max(0, Math.min(1, (EDGE_PAD - x) / EDGE_PAD));
+      offX = offX * (1 - p);
+    }
+
+    this._dragProxy.style.transform = `translate(${Math.round(x + offX - this._dragProxy.width / 2)}px, ${Math.round(y + offY - this._dragProxy.height / 2)}px)`;
+  }
+
+  _clearDragProxy() {
+    if (!this._dragProxy) return;
+    this._dragProxy.remove();
+    this._dragProxy = null;
   }
 
   _bindDrag() {
     let _rafPending = false;
     let _lastPt = null;
     const onMove = (e) => {
-      if (!this.dragging) return;
+      if (!this.dragging || !this.dragEnabled) return;
       e.preventDefault();
       const pt = e.touches ? e.touches[0] : e;
+      const now = performance.now();
+      const prev = this.dragging.lastMove;
+      if (prev) {
+        const dt = Math.max(1, now - prev.t);
+        const ivx = (pt.clientX - prev.x) / dt;
+        const ivy = (pt.clientY - prev.y) / dt;
+        // Low-pass smoothing to avoid jitter while preserving snappiness
+        this.dragging.vx = (this.dragging.vx ?? 0) * 0.6 + ivx * 0.4;
+        this.dragging.vy = (this.dragging.vy ?? 0) * 0.6 + ivy * 0.4;
+      }
+      this.dragging.lastMove = { x: pt.clientX, y: pt.clientY, t: now };
       _lastPt = { x: pt.clientX, y: pt.clientY };
+      this._updateDragProxy(pt.clientX, pt.clientY);
       if (_rafPending) return;
       _rafPending = true;
       requestAnimationFrame(() => {
@@ -249,11 +315,18 @@ export class Renderer {
       });
     };
     const onUp = (e) => {
-      if (!this.dragging) return;
+      if (!this.dragging || !this.dragEnabled) return;
+      const pt = e.changedTouches ? e.changedTouches[0] : e;
+      const pickup = this.dragging.pickup;
+      const dx = pt.clientX - (pickup?.x ?? pt.clientX);
+      const dy = pt.clientY - (pickup?.y ?? pt.clientY);
+      const inCancelZone = Math.hypot(dx, dy) <= (pickup?.r ?? 0);
       const snapped = this._lastSnap;
-      if (snapped && snapped.canPlace && this.onDrop)
+      // Cancel only when the finger is returned close to where block was picked.
+      if (!inCancelZone && snapped && snapped.canPlace && this.onDrop)
         this.onDrop(this.dragging.block, this.dragging.el, snapped.row, snapped.col);
       this.dragging.el.classList.remove('dragging');
+      this._clearDragProxy();
       this._ghostState = null;
       this.dragging = null; _lastPt = null; this._lastSnap = null; _rafPending = false;
     };
@@ -271,12 +344,34 @@ export class Renderer {
   _makeStartHandler(el, idx) {
     return (e) => {
       e.preventDefault();
+      if (!this.dragEnabled) return;
       const block = this._getBlockForIndex(idx);
       if (!block || el.classList.contains('used')) return;
-      this.dragging = { block, el, idx };
+      const isTouch = !!e.touches;
+      const rect = el.getBoundingClientRect();
+      const pickup = {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+        r: Math.max(rect.width, rect.height) * 0.56,
+      };
+      const thumbOffset = isTouch
+        ? (this._handedness === 'left' ? { x: 46, y: -82 } : { x: -46, y: -82 })
+        : { x: -18, y: -20 };
+      this.dragging = {
+        block,
+        el,
+        idx,
+        vx: 0,
+        vy: 0,
+        lastMove: null,
+        pickup,
+        thumbOffset,
+      };
       el.classList.add('dragging');
       // Show ghost immediately at the initial touch/click position
       const pt = e.touches ? e.touches[0] : e;
+      this._ensureDragProxy(block, el);
+      this._updateDragProxy(pt.clientX, pt.clientY);
       this._updateGhostFromPoint(pt.clientX, pt.clientY);
     };
   }
@@ -294,6 +389,20 @@ export class Renderer {
   }
 
   setBlockProvider(fn) { this._getBlockForIndex = fn; }
+
+  setHandedness(mode) {
+    this._handedness = mode === 'left' ? 'left' : 'right';
+  }
+
+  setDragEnabled(enabled) {
+    this.dragEnabled = !!enabled;
+    if (this.dragEnabled || !this.dragging) return;
+    this.dragging.el?.classList.remove('dragging');
+    this._clearDragProxy();
+    this.dragging = null;
+    this._ghostState = null;
+    this._lastSnap = null;
+  }
 
   /** Re-bind drag start listeners (call after new .block-preview elements are added). */
   rebindDrag() {

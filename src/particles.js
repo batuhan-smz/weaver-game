@@ -37,15 +37,15 @@ class Particle {
     this.y    = y;
     this.hex  = hex;
     const angle    = Math.random() * Math.PI * 2;
-    const speed    = 60 + Math.random() * 120;
+    const speed    = 120 + Math.random() * 230;
     this.vx        = Math.cos(angle) * speed;
     this.vy        = Math.sin(angle) * speed;
-    this.size      = 4 + Math.random() * 6;
+    this.size      = 4 + Math.random() * 8;
     this.life      = 0;           // 0-1
-    this.duration  = 0.5 + Math.random() * 0.4; // seconds
+    this.duration  = 0.42 + Math.random() * 0.34; // seconds
     this.rotation  = Math.random() * Math.PI * 2;
     this.rotSpeed  = (Math.random() - 0.5) * 10;
-    this.gravity   = 150;
+    this.gravity   = 230;
   }
 
   tick(dt) {
@@ -67,6 +67,69 @@ class Particle {
     ctx.fillStyle = this.hex;
     const s = this.size * scale;
     ctx.fillRect(-s/2, -s/2, s, s);
+    ctx.restore();
+  }
+}
+
+class EmberParticle {
+  constructor(x, y, hex) {
+    this.x = x; this.y = y; this.hex = hex;
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 70 + Math.random() * 140;
+    this.vx = Math.cos(angle) * speed;
+    this.vy = Math.sin(angle) * speed;
+    this.life = 0;
+    this.duration = 0.45 + Math.random() * 0.3;
+    this.radius = 2 + Math.random() * 3;
+    this.gravity = 80;
+  }
+
+  tick(dt) {
+    this.life += dt / this.duration;
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    this.vy += this.gravity * dt;
+    return this.life < 1;
+  }
+
+  draw(ctx) {
+    const alpha = 1 - easeInQuad(this.life);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = this.hex;
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = this.hex;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+class Shockwave {
+  constructor(x, y, hex) {
+    this.x = x; this.y = y; this.hex = hex;
+    this.life = 0;
+    this.duration = 0.28;
+  }
+
+  tick(dt) {
+    this.life += dt / this.duration;
+    return this.life < 1;
+  }
+
+  draw(ctx) {
+    const p = easeOutQuad(Math.min(1, this.life));
+    const radius = 6 + p * 34;
+    ctx.save();
+    ctx.globalAlpha = (1 - this.life) * 0.8;
+    ctx.strokeStyle = this.hex;
+    ctx.lineWidth = 2.4 - p * 1.5;
+    ctx.shadowColor = this.hex;
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, radius, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.restore();
   }
 }
@@ -119,13 +182,29 @@ export class ParticleSystem {
    * @param {Object} colorSnapshot  "row,col" → colorID (captured before clear)
    */
   burstCells(cells, palette, colorSnapshot) {
+    let shakeCount = 0;
     for (const { row, col } of cells) {
       const colorID = colorSnapshot[`${row},${col}`];
       const hex     = palette[colorID]?.hex ?? '#a78bfa';
       const { x, y } = cellCenter(row, col, this.cellMetrics);
-      const count   = 6 + Math.floor(Math.random() * 5);
+      const count   = 13 + Math.floor(Math.random() * 7);
       for (let i = 0; i < count; i++) {
         this._particles.push(new Particle(x, y, hex));
+      }
+      const embers = 6 + Math.floor(Math.random() * 5);
+      for (let i = 0; i < embers; i++) {
+        this._particles.push(new EmberParticle(x, y, hex));
+      }
+      this._particles.push(new Shockwave(x, y, hex));
+      shakeCount++;
+    }
+
+    if (shakeCount >= 4) {
+      const gc = document.getElementById('game-container');
+      if (gc) {
+        gc.classList.remove('game-container--shake');
+        void gc.offsetWidth;
+        gc.classList.add('game-container--shake');
       }
     }
   }

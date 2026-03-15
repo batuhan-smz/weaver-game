@@ -45,6 +45,13 @@ export const POWERUPS = [
     desc: 'Adds one more block to your current tray',
     price: 40,
   },
+    {
+      id: 'rotate_block',
+      name: 'Block Rotate',
+      icon: '🔄',
+      desc: 'Rotate one tray block left/right before placing',
+      price: 35,
+    },
 ];
 
 const MARKET_KEY = 'weaverMarket';

@@ -45,7 +45,8 @@ async function _doInit() {
   const [
     { initializeApp, getApp },
     { getAuth, GoogleAuthProvider, signInWithPopup, signInWithCredential, signOut, onAuthStateChanged },
-    { getFirestore, doc, getDoc, setDoc, serverTimestamp },
+    { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
+      collection, query, where, limit, getDocs, serverTimestamp },
   ] = await Promise.all([
     import(`${CDN}/firebase-app.js`),
     import(`${CDN}/firebase-auth.js`),
@@ -63,7 +64,8 @@ async function _doInit() {
   _s = {
     auth, db,
     GoogleAuthProvider, signInWithPopup, signInWithCredential, signOut, onAuthStateChanged,
-    doc, getDoc, setDoc, serverTimestamp,
+    doc, getDoc, setDoc, updateDoc, onSnapshot,
+    collection, query, where, limit, getDocs, serverTimestamp,
   };
   return _s;
 }
@@ -158,4 +160,11 @@ export async function applyBonusIfNeeded(uid, email) {
   if (snap.exists() && snap.data().bonusApplied) return 0;
   await s.setDoc(ref, { bonusApplied: true }, { merge: true });
   return BONUS_COINS;
+}
+
+/**
+ * Returns the initialized Firebase services object (for VS mode etc.).
+ */
+export async function getFirebaseServices() {
+  return _init();
 }

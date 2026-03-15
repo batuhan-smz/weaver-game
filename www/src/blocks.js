@@ -167,14 +167,14 @@ function analyseGrid(grid) {
  * @param {import('./grid.js').Grid} grid
  * @param {number[]} handColors  colorIDs already in the current tray
  */
-function pickColor(grid, handColors) {
+function pickColor(grid, handColors, maxColor = COLOR_COUNT) {
   const counts = Array(COLOR_COUNT + 1).fill(0); // index 0 unused
   for (const { row, col } of grid.getFilledCells())
     counts[grid.get(row, col).colorID]++;
 
   // Find dominant colour on grid that is close to a 6-cluster
   let bonusColor = 0;
-  for (let cid = 1; cid <= COLOR_COUNT; cid++) {
+  for (let cid = 1; cid <= maxColor; cid++) {
     // Quick 2-BFS scan: any cluster of 3 or 4?
     const SIZE = 8;
     const visited = new Set();
@@ -194,7 +194,7 @@ function pickColor(grid, handColors) {
   }
 
   const options = [];
-  for (let cid = 1; cid <= COLOR_COUNT; cid++) {
+  for (let cid = 1; cid <= maxColor; cid++) {
     let w = 1 / (counts[cid] + 1); // fewer on board → higher base weight
     if (cid === bonusColor) w *= 3; // strong bonus if close to cluster
     // Avoid giving same 4 colors in hand
@@ -213,7 +213,7 @@ function pickColor(grid, handColors) {
  * @param {boolean} hard   if true, force-include at least one awkward piece
  * @returns {Block[]}
  */
-export function generateTray(grid, count = 4, hard = false) {
+export function generateTray(grid, count = 4, hard = false, maxColor = COLOR_COUNT) {
   const shapeBias = analyseGrid(grid);
   const blocks    = [];
   const handColors= [];
@@ -236,7 +236,7 @@ export function generateTray(grid, count = 4, hard = false) {
     }
 
     const shapeKey = weightedChoice(shapeOptions);
-    const colorID  = pickColor(grid, handColors);
+    const colorID  = pickColor(grid, handColors, maxColor);
     handColors.push(colorID);
     blocks.push(new Block(shapeKey, colorID));
   }
