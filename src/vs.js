@@ -10,8 +10,10 @@
  *     createdAt:   timestamp
  *     host:        { uid, name }
  *     guest:       null | { uid, name }
- *     hostState:   { score, gameOver, board }   — board = 64-char colorID string
- *     guestState:  null | { score, gameOver, board }
+ *     hostRankPoints: number
+ *     guestRankPoints: number | null
+ *     hostState:   { score, gameOver, board, lastMoveAt, updatedAt, loseReason }
+ *     guestState:  null | { score, gameOver, board, lastMoveAt, updatedAt, loseReason }
  *     winner:      null | uid | 'tie'
  */
 
@@ -108,11 +110,12 @@ function _matchId()  { return `m_${Date.now()}_${Math.random().toString(36).slic
 /**
  * Create a new VS match as host. Returns { matchId, inviteCode, seed }.
  */
-export async function createMatch(user, { visibility = 'private' } = {}) {
+export async function createMatch(user, { visibility = 'private', rankPoints = 0 } = {}) {
   const s          = await getFirebaseServices();
   const inviteCode = visibility === 'private' ? _genCode() : null;
   const seed       = _genSeed();
   const matchId    = _matchId();
+  const now        = Date.now();
 
   await s.setDoc(s.doc(s.db, 'matches', matchId), {
     status:     'waiting',
@@ -122,7 +125,16 @@ export async function createMatch(user, { visibility = 'private' } = {}) {
     createdAt:  s.serverTimestamp(),
     host:       { uid: user.uid, name: user.displayName || user.email || 'Oyuncu 1' },
     guest:      null,
-    hostState:  { score: 0, gameOver: false, board: _EMPTY_BOARD },
+    hostRankPoints: Number(rankPoints ?? 0),
+    guestRankPoints: null,
+    hostState:  {
+      score: 0,
+      gameOver: false,
+      board: _EMPTY_BOARD,
+      lastMoveAt: now,
+      updatedAt: now,
+      loseReason: null,
+    },
     guestState: null,
     winner:     null,
   });
@@ -132,8 +144,9 @@ export async function createMatch(user, { visibility = 'private' } = {}) {
 /**
  * Join an existing match by 6-char invite code. Returns { matchId, seed }.
  */
-export async function joinMatchByCode(code, user) {
+export async function joinMatchByCode(code, user, rankPoints = 0) {
   const s = await getFirebaseServices();
+  const now = Date.now();
   const q = s.query(
     s.collection(s.db, 'matches'),
     s.where('visibility', '==', 'private'),
@@ -150,7 +163,15 @@ export async function joinMatchByCode(code, user) {
   await s.updateDoc(docSnap.ref, {
     status:     'countdown',
     guest:      { uid: user.uid, name: user.displayName || user.email || 'Oyuncu 2' },
-    guestState: { score: 0, gameOver: false, board: _EMPTY_BOARD },
+    guestRankPoints: Number(rankPoints ?? 0),
+    guestState: {
+      score: 0,
+      gameOver: false,
+      board: _EMPTY_BOARD,
+      lastMoveAt: now,
+      updatedAt: now,
+      loseReason: null,
+    },
   });
   return { matchId: docSnap.id, seed: data.seed };
 }
@@ -159,8 +180,9 @@ export async function joinMatchByCode(code, user) {
  * Find and join a random waiting match, or create one if none found.
  * Returns { matchId, seed, role: 'host'|'guest' }.
  */
-export async function quickMatch(user) {
+export async function quickMatch(user, rankPoints = 0) {
   const s = await getFirebaseServices();
+  const now = Date.now();
   const q = s.query(
     s.collection(s.db, 'matches'),
     s.where('visibility', '==', 'public'),
@@ -178,24 +200,46 @@ export async function quickMatch(user) {
       await s.updateDoc(d.ref, {
         status:     'countdown',
         guest:      { uid: user.uid, name: user.displayName || user.email || 'Oyuncu 2' },
-        guestState: { score: 0, gameOver: false, board: _EMPTY_BOARD },
+        guestRankPoints: Number(rankPoints ?? 0),
+        guestState: {
+          score: 0,
+          gameOver: false,
+          board: _EMPTY_BOARD,
+          lastMoveAt: now,
+          updatedAt: now,
+          loseReason: null,
+        },
       });
       return { matchId: d.id, seed: data.seed, role: 'guest' };
     } catch { /* race — another player joined first, try next */ }
   }
   // No match found — create one and wait
-  const result = await createMatch(user, { visibility: 'public' });
+  const result = await createMatch(user, { visibility: 'public', rankPoints });
   return { ...result, role: 'host' };
 }
 
 /**
  * Push local game state to Firestore.
  */
-export async function updatePlayerState(matchId, role, { score, gameOver, board }) {
+export async function updatePlayerState(matchId, role, {
+  score,
+  gameOver,
+  board,
+  lastMoveAt,
+  updatedAt,
+  loseReason = null,
+}) {
   const s     = await getFirebaseServices();
   const field = role === 'host' ? 'hostState' : 'guestState';
   await s.updateDoc(s.doc(s.db, 'matches', matchId), {
-    [field]: { score, gameOver, board },
+    [field]: {
+      score,
+      gameOver,
+      board,
+      lastMoveAt: lastMoveAt ?? Date.now(),
+      updatedAt: updatedAt ?? Date.now(),
+      loseReason,
+    },
   });
 }
 

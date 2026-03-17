@@ -4,7 +4,7 @@
   "description": "Weaver - Block puzzle game with BFS color clusters",
   "main": "index.html",
   "scripts": {
-    "build": "robocopy index.html www /IS /IT & robocopy style.css www /IS /IT & robocopy src www\\src /E /IS /IT & robocopy assets www\\assets /E /IS /IT & exit 0",
+    "build": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"New-Item -ItemType Directory -Force -Path 'www','www/src' | Out-Null; Copy-Item -Path 'index.html' -Destination 'www/index.html' -Force; Copy-Item -Path 'style.css' -Destination 'www/style.css' -Force; if (Test-Path 'src') { Copy-Item -Path 'src/*' -Destination 'www/src' -Recurse -Force }; if (Test-Path 'assets') { New-Item -ItemType Directory -Force -Path 'www/assets' | Out-Null; Copy-Item -Path 'assets/*' -Destination 'www/assets' -Recurse -Force }\"",
     "sync": "npm run build && npx cap sync",
     "android": "npx cap open android"
   },

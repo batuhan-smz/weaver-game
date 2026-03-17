@@ -6,6 +6,9 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>Weaver</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;800;900&display=swap" rel="stylesheet" />
   <link rel="manifest" href="manifest.json" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="style.css" />
@@ -41,8 +44,11 @@
     <div id="ss-profile" class="hidden">
       <img id="ss-avatar" src="" alt="" referrerpolicy="no-referrer" crossorigin="anonymous" />
       <span id="ss-username"></span>
+      <span id="ss-rank-badge" class="rank-pill">BRONZ • 0 RP</span>
       <button id="ss-signout-btn">✕</button>
     </div>
+
+    <div id="ss-rank-summary" class="rank-summary-pill">BRONZ • 0 RP</div>
 
     <button id="start-btn">PLAY</button>
     <button id="ss-settings-btn" aria-label="Settings">⚙️ AYARLAR</button>
@@ -53,6 +59,7 @@
       </button>
       <button id="ss-buy-coins-btn" class="ss-earn-btn ss-earn-btn--buy">
         <span>🪙 Altın Al</span>
+        <span class="earn-reward earn-reward--infinite">+∞</span>
       </button>
     </div>
     <button id="ss-signin-btn">
@@ -155,6 +162,7 @@
           <div id="vs-opp-final-score" class="vs-score-val">0</div>
         </div>
       </div>
+      <div id="vs-rank-result" class="vs-rank-result"></div>
       <button id="vs-rematch-btn" class="vs-big-btn">🔄 Tekrar Oyna</button>
       <button id="vs-exit-btn" class="vs-exit-btn">Ana Menü</button>
     </div>
@@ -175,9 +183,21 @@
           </span>
         </div>
         <div id="coin-hud"><span class="coin-icon">🪙</span><span id="coin-display">0</span></div>
-        <div class="hbox"><span class="hlabel">BEST</span><span id="best-display">0</span></div>
+          <div class="hbox"><span class="hlabel">BEST</span><span id="best-display">0</span></div>
+          <div id="play-rank-pill" class="rank-summary-pill rank-summary-pill--compact">BRONZ • 0 RP</div>
       </div>
       <div id="game-area">
+        <div id="vs-dominance" class="hidden" aria-live="polite">
+          <div class="vs-dominance-track">
+            <div id="vs-dom-blue" class="vs-dom-fill vs-dom-fill--blue"></div>
+            <div id="vs-dom-red" class="vs-dom-fill vs-dom-fill--red"></div>
+          </div>
+          <div class="vs-dominance-meta">
+            <span id="vs-dom-blue-val">SEN 0</span>
+            <span id="vs-dom-center">BRONZ HEDEF 1000 | DENGEDE</span>
+            <span id="vs-dom-red-val">RAKIP 0</span>
+          </div>
+        </div>
         <!-- VS opponent panel (hidden in normal mode) -->
         <div id="vs-opp-panel" class="hidden">
           <div class="vs-opp-name-row">
@@ -216,7 +236,7 @@
     <!-- ── PAGE: SKINS ── -->
     <div id="page-skins" class="page hidden">
       <div id="skins-header">
-        <h2>SKINS</h2>
+        <h2 id="skins-page-title">SKINS</h2>
         <div id="skins-coin-row">
           <span class="coin-icon">🪙</span>
           <span id="skins-coin-display">0</span>
@@ -229,7 +249,7 @@
     <!-- ── PAGE: MARKET ── -->
     <div id="page-market" class="page hidden">
       <div id="market-header">
-        <h2>MARKET</h2>
+        <h2 id="market-page-title">MARKET</h2>
         <div id="market-coin-row">
           <span class="coin-icon">🪙</span>
           <span id="market-coin-display">0</span>
@@ -245,35 +265,66 @@
     <div id="page-settings" class="page hidden">
       <canvas id="settings-bg-canvas"></canvas>
       <div id="settings-header">
-        <h2>SETTINGS</h2>
+        <h2 id="settings-page-title">SETTINGS</h2>
       </div>
       <div id="settings-body">
 
         <!-- Sound section -->
         <div class="settings-section">
-          <div class="settings-section-title">🔊 SES EFEKTLERİ</div>
+          <div class="settings-section-title" id="settings-sound-title">🔊 SES</div>
           <div class="settings-row">
-            <span class="settings-label">Ses Düzeyi</span>
+            <span class="settings-label" id="settings-master-label">Genel Ses</span>
+            <div class="settings-slider-wrap">
+              <input type="range" id="master-volume-slider" min="0" max="100" step="1" value="70" />
+              <span id="master-volume-val">70%</span>
+            </div>
+          </div>
+          <div class="settings-row">
+            <span class="settings-label" id="settings-sfx-label">Efekt Sesleri</span>
             <div class="settings-slider-wrap">
               <input type="range" id="sfx-volume-slider" min="0" max="100" step="1" value="70" />
               <span id="sfx-volume-val">70%</span>
             </div>
           </div>
           <div class="settings-row">
-            <span class="settings-label">El Modu</span>
+            <span class="settings-label" id="settings-music-label">Müzik</span>
+            <div class="settings-slider-wrap">
+              <input type="range" id="music-volume-slider" min="0" max="100" step="1" value="35" />
+              <span id="music-volume-val">35%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title" id="settings-gameplay-title">🎮 OYNANIŞ</div>
+          <div class="settings-row">
+            <span class="settings-label" id="settings-hand-label">El Modu</span>
             <select id="hand-mode-select" class="settings-select">
               <option value="right">Sağ El</option>
+              <option value="center">Orta</option>
               <option value="left">Sol El</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title" id="settings-ui-title">🖼️ ARAYÜZ</div>
+          <div class="settings-row">
+            <span class="settings-label" id="settings-font-label">Yazı Tipi</span>
+            <select id="font-select" class="settings-select">
+              <option value="avenir">Avenir Next</option>
+              <option value="nunito">Nunito</option>
+              <option value="verdana">Verdana</option>
             </select>
           </div>
         </div>
 
         <!-- Account section -->
         <div class="settings-section" id="settings-account">
-          <div class="settings-section-title">👤 HESAP</div>
+          <div class="settings-section-title" id="settings-account-title">👤 HESAP</div>
           <div id="settings-signed-out">
-            <p class="settings-hint">Oturum açarak ilerlemenizi buluta kaydedin.</p>
-            <div class="signin-bonus-badge signin-bonus-badge--settings">🎁 Yeni hesap bonusu: <strong>200 🪙</strong></div>
+            <p class="settings-hint" id="settings-signin-hint">Oturum açarak ilerlemenizi buluta kaydedin.</p>
+            <div class="signin-bonus-badge signin-bonus-badge--settings" id="settings-bonus-hint">🎁 Yeni hesap bonusu: <strong>200 🪙</strong></div>
             <button id="settings-signin-btn" class="settings-btn settings-btn--google">
               <svg width="16" height="16" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
                 <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 01-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z" fill="#4285F4"/>
@@ -281,7 +332,7 @@
                 <path d="M3.964 10.707A5.41 5.41 0 013.682 9c0-.593.102-1.17.282-1.707V4.961H.957A9 9 0 000 9c0 1.452.348 2.827.957 4.039l3.007-2.332z" fill="#FBBC05"/>
                 <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A9 9 0 00.957 4.961L3.964 7.293C4.672 5.165 6.656 3.58 9 3.58z" fill="#EA4335"/>
               </svg>
-              Google ile Giriş Yap
+              <span id="settings-signin-label">Google ile Giriş Yap</span>
             </button>
           </div>
           <div id="settings-signed-in" class="hidden">
@@ -290,6 +341,7 @@
               <div class="settings-profile-info">
                 <span id="settings-username"></span>
                 <span id="settings-email"></span>
+                <span id="settings-rank-badge" class="rank-pill rank-pill--settings">BRONZ • 0 RP</span>
               </div>
             </div>
             <button id="settings-signout-btn" class="settings-btn settings-btn--danger">✕ Çıkış Yap</button>
@@ -303,26 +355,56 @@
         </div>
 
         <!-- Version -->
-        <div class="settings-version">Weaver v1.6.0</div>
+        <div class="settings-version" id="settings-version">Weaver v1.6.0</div>
       </div>
     </div>
 
     <!-- ── BOTTOM NAV ── -->
     <nav id="bottom-nav">
+      <button class="nav-btn nav-btn--menu" id="nav-menu-btn">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <rect x="5" y="5" width="5.5" height="5.5" rx="1.2" stroke="currentColor" stroke-width="1.8"/>
+            <rect x="13.5" y="5" width="5.5" height="5.5" rx="1.2" stroke="currentColor" stroke-width="1.8"/>
+            <rect x="5" y="13.5" width="5.5" height="5.5" rx="1.2" stroke="currentColor" stroke-width="1.8"/>
+            <rect x="13.5" y="13.5" width="5.5" height="5.5" rx="1.2" stroke="currentColor" stroke-width="1.8"/>
+          </svg>
+        </span>
+        <span class="nav-label" data-i18n="menu">MENU</span>
+      </button>
       <button class="nav-btn" data-page="market">
-        <span class="nav-icon">🛒</span>
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M7 8h10l-1 9H8L7 8Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+            <path d="M9.5 8a2.5 2.5 0 0 1 5 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </span>
         <span class="nav-label" data-i18n="market">MARKET</span>
       </button>
       <button class="nav-btn nav-btn--play" data-page="play">
-        <span class="nav-icon">▶️</span>
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <defs>
+              <linearGradient id="nav-play-grad" x1="6" y1="5" x2="18" y2="19" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="#34d399"/>
+                <stop offset="1" stop-color="#22d3ee"/>
+              </linearGradient>
+            </defs>
+            <path d="M7.2 5.8c0-.7.78-1.12 1.36-.75l9.1 5.92c.54.35.54 1.15 0 1.5l-9.1 5.92c-.58.38-1.36-.05-1.36-.74V5.8Z" fill="url(#nav-play-grad)"/>
+            <path d="M7.2 5.8c0-.7.78-1.12 1.36-.75l9.1 5.92c.54.35.54 1.15 0 1.5l-9.1 5.92c-.58.38-1.36-.05-1.36-.74V5.8Z" stroke="#d1fae5" stroke-width="1" stroke-linejoin="round"/>
+          </svg>
+        </span>
         <span class="nav-label" data-i18n="play">OYNA</span>
       </button>
-      <button class="nav-btn nav-btn--menu" id="nav-menu-btn">
-        <span class="nav-icon">⊞</span>
-        <span class="nav-label" data-i18n="menu">MENU</span>
-      </button>
       <button class="nav-btn" data-page="skins">
-        <span class="nav-icon">🎨</span>
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M12 4c4.4 0 8 3 8 6.8c0 2.9-2 4.7-4.5 4.7h-1.4c-.7 0-1.2.6-1.2 1.2c0 1.5-1.2 2.3-2.9 2.3c-3.5 0-6-2.6-6-6.4C4 7.5 7.4 4 12 4Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+            <circle cx="9" cy="9.3" r="1" fill="currentColor"/>
+            <circle cx="12.7" cy="7.8" r="1" fill="currentColor"/>
+            <circle cx="15.6" cy="10.4" r="1" fill="currentColor"/>
+          </svg>
+        </span>
         <span class="nav-label" data-i18n="skins">SKINS</span>
       </button>
     </nav>

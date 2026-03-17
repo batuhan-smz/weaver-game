@@ -12,7 +12,6 @@
 
 const BASE_POINTS  = 10;
 const COMBO_BONUS  = 50;
-const COMBO_DECAY  = 3000; // ms until combo resets if no move made
 
 export class ScoreSystem {
   constructor() {
@@ -38,8 +37,6 @@ export class ScoreSystem {
    * @returns {{ delta: number, label: string|null }}
    */
   record({ deletedBlocks, clearedRows, clearedCols, colorClusters, now }) {
-    // Combo decay
-    if (now - this._lastMoveTime > COMBO_DECAY) this.comboMultiplier = 1;
     this._lastMoveTime = now;
 
     const hasClear   = clearedRows + clearedCols > 0;
@@ -67,6 +64,12 @@ export class ScoreSystem {
 
     this._emit();
     return { delta: Math.round(delta), label };
+  }
+
+  breakCombo() {
+    if (this.comboMultiplier === 1) return;
+    this.comboMultiplier = 1;
+    this._emit();
   }
 
   reset() {

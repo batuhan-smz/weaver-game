@@ -107,14 +107,26 @@ export async function googleSignIn() {
 
 /** Sign out current user. */
 export async function googleSignOut() {
-  if (!_s) return;
+  const s = await _init().catch(() => null);
+  if (!s) return;
   if (IS_NATIVE) {
     try {
       const GoogleAuth = window.Capacitor?.Plugins?.GoogleAuth;
-      if (GoogleAuth) await GoogleAuth.signOut();
+      if (GoogleAuth) {
+        await GoogleAuth.initialize({
+          clientId: '81968395529-shv2jhlldjmk3g94eervp36e8r9n0g77.apps.googleusercontent.com',
+          scopes: ['profile', 'email'],
+          grantOfflineAccess: true,
+        }).catch(() => {});
+        await GoogleAuth.signOut();
+      }
     } catch (_) {}
   }
-  return _s.signOut(_s.auth);
+  try {
+    return await s.signOut(s.auth);
+  } catch (_) {
+    return null;
+  }
 }
 
 /**

@@ -11,7 +11,13 @@ import { ParticleSystem }    from './particles.js';
 import { isGameOver }        from './gameover.js';
 import { SKINS, EconomyStore } from './skins.js';
 import { POWERUPS, MarketStore } from './market.js';
-import { playPlace, playClear, playCluster, playMega, setSfxVolume, getSfxVolume } from './sounds.js';
+import {
+  playPlace, playClear, playCluster, playMega, playClean,
+  setMasterVolume, getMasterVolume,
+  setSfxVolume, getSfxVolume,
+  setMusicVolume, getMusicVolume,
+  prepareBackgroundMusic, resumeAudio,
+} from './sounds.js';
 import {
   googleSignIn, googleSignOut, onAuthChange,
   loadCloudSave, saveCloudSave, applyBonusIfNeeded, getFirebaseServices,
@@ -30,6 +36,16 @@ const SCORE_PER_COIN = 1000;
 const TUTORIAL_KEY   = 'weaverTutorialDone';
 const TUTORIAL_TOTAL_STEPS = 4;
 const CLEAN_BONUS_POINTS = 500;
+const VS_STATE_SYNC_MS = 300;
+const VS_MOVE_TIMEOUT_MS = 20_000;
+const GUEST_SNAPSHOT_KEY = 'weaverGuestSnapshot';
+const RANK_KEY_PREFIX = 'weaverRankPoints';
+const RANK_TIERS = [
+  { key: 'bronze',  label: 'BRONZ', threshold: 0,    gapToWin: 1000 },
+  { key: 'silver',  label: 'GUMUS', threshold: 1000, gapToWin: 2000 },
+  { key: 'gold',    label: 'ALTIN', threshold: 2000, gapToWin: 3000 },
+  { key: 'diamond', label: 'ELMAS', threshold: 3000, gapToWin: 4000 },
+];
 
 const COLOR_STEPS = [
   { maxScore: 2000, colors: 4 },
@@ -43,10 +59,31 @@ const COLOR_STEPS = [
 
 const LAYOUT = { NAV: 56, HEADER: 56, TRAY: 126, PAD: 14 };
 
+function _measuredHeight(id, fallback) {
+  const el = document.getElementById(id);
+  if (!el || el.classList.contains('hidden')) return fallback;
+  return Math.max(0, Math.round(el.getBoundingClientRect().height)) || fallback;
+}
+
 function computeGridSize() {
-  const { NAV, HEADER, TRAY, PAD } = LAYOUT;
-  const aw = window.innerWidth  - PAD * 2;
-  const ah = window.innerHeight - NAV - HEADER - TRAY - PAD * 2;
+  const { PAD } = LAYOUT;
+  const area = document.getElementById('game-area');
+  const hasMeasuredArea = !!area && area.clientWidth > 0 && area.clientHeight > 0;
+
+  // Preferred: use real available space of the game area.
+  const aw = hasMeasuredArea ? (area.clientWidth - PAD * 2) : (window.innerWidth - PAD * 2);
+  const ah = hasMeasuredArea
+    ? (area.clientHeight - PAD * 2)
+    : (() => {
+        const NAV = _measuredHeight('bottom-nav', LAYOUT.NAV);
+        const HEADER = _measuredHeight('play-header', LAYOUT.HEADER);
+        const trayH = _measuredHeight('tray', LAYOUT.TRAY);
+        const rotateH = _measuredHeight('rotate-controls', 0);
+        // Tray and rotate controls are stacked, so their heights are additive.
+        const bottomStack = trayH + rotateH;
+        return window.innerHeight - NAV - HEADER - bottomStack - PAD * 2;
+      })();
+
   return Math.max(160, Math.floor(Math.min(aw, ah) / 10) * 10);
 }
 
@@ -62,19 +99,131 @@ function _setVisible(el, visible) {
   el?.classList.toggle('hidden', !visible);
 }
 
+function _rankStorageKey(uid) {
+  return uid ? `${RANK_KEY_PREFIX}_${uid}` : RANK_KEY_PREFIX;
+}
+
+function _getRankPoints(uid = _currentUser?.uid) {
+  return Number(localStorage.getItem(_rankStorageKey(uid)) ?? 0);
+}
+
+function _setRankPoints(points, uid = _currentUser?.uid) {
+  const safe = Math.max(0, Math.round(points));
+  localStorage.setItem(_rankStorageKey(uid), String(safe));
+  return safe;
+}
+
+function _tierForRankPoints(points) {
+  let tier = RANK_TIERS[0];
+  for (const t of RANK_TIERS) {
+    if (points >= t.threshold) tier = t;
+  }
+  return tier;
+}
+
+function _gapTargetByRanks(hostRankPoints, guestRankPoints) {
+  const hostTier = _tierForRankPoints(Number(hostRankPoints ?? 0));
+  const guestTier = _tierForRankPoints(Number(guestRankPoints ?? 0));
+  return Math.max(hostTier.gapToWin, guestTier.gapToWin);
+}
+
+function _rankDeltaForResult(myRank, oppRank, isWin, isTie) {
+  if (isTie) return 0;
+  const diff = Math.abs(myRank - oppRank);
+  const w = Math.min(1, diff / 200);
+  const lowerWinGain = Math.round(40 + 10 * w);
+  const higherWinGain = Math.round(40 - 10 * w);
+  const meLower = myRank < oppRank;
+
+  if (isWin) return meLower ? lowerWinGain : higherWinGain;
+  return meLower ? -higherWinGain : -lowerWinGain;
+}
+
+function _formatRankText(points) {
+  const tier = _tierForRankPoints(points);
+  return `${tier.label} • ${Number(points ?? 0).toLocaleString()} RP`;
+}
+
+function _updateRankBadges(uid = _currentUser?.uid) {
+  const points = _getRankPoints(uid);
+  const text = _formatRankText(points);
+  ['ss-rank-badge', 'ss-rank-summary', 'play-rank-pill', 'settings-rank-badge']
+    .forEach(id => {
+      const el = _el(id);
+      if (el) el.textContent = text;
+    });
+}
+
+function _captureGuestSnapshot() {
+  const snapshot = {
+    coins: economy.coins,
+    unlockedIds: [...economy.unlockedIds],
+    activeSkinId: economy.activeSkinId,
+    bestScore: Number(localStorage.getItem('weaverBest') ?? 0),
+    rankPoints: _getRankPoints(),
+  };
+  localStorage.setItem(GUEST_SNAPSHOT_KEY, JSON.stringify(snapshot));
+}
+
+function _restoreGuestSnapshot() {
+  let snapshot = null;
+  try {
+    snapshot = JSON.parse(localStorage.getItem(GUEST_SNAPSHOT_KEY) || 'null');
+  } catch {}
+  if (!snapshot) return;
+
+  economy.coins = Number(snapshot.coins ?? economy.coins ?? 0);
+  economy.unlockedIds = new Set(snapshot.unlockedIds ?? [...economy.unlockedIds]);
+  economy.unlockedIds.add('classic');
+  economy.activeSkinId = snapshot.activeSkinId ?? economy.activeSkinId ?? 'classic';
+  economy._save();
+
+  localStorage.setItem('weaverBest', String(Number(snapshot.bestScore ?? 0)));
+  _setRankPoints(Number(snapshot.rankPoints ?? 0));
+  localStorage.removeItem(GUEST_SNAPSHOT_KEY);
+
+  updateCoinDisplays();
+  _updateStartScreen();
+  renderSkinsPage();
+  if (game) {
+    game.renderer.setSkin(economy.getActiveSkin());
+    game._renderTray();
+  }
+}
+
 // ── Global state ────────────────────────────────────────────────────────────
 
 const economy = new EconomyStore();
 const market  = new MarketStore();
 let game      = null;
+let _currentUser = null;
 
 // ── Animation preference ──────────────────────────────────────────────────────
 const ANIM_KEY       = 'weaverAnimations';
 const _getAnimEnabled = () => localStorage.getItem(ANIM_KEY) !== 'false';
 const _setAnimEnabled = v  => localStorage.setItem(ANIM_KEY, String(v));
 const HAND_KEY = 'weaverHandMode';
-const _getHandMode = () => localStorage.getItem(HAND_KEY) || 'right';
-const _setHandMode = v => localStorage.setItem(HAND_KEY, v === 'left' ? 'left' : 'right');
+const _normalizeHandMode = v => (v === 'left' || v === 'right') ? v : 'center';
+const _getHandMode = () => _normalizeHandMode(localStorage.getItem(HAND_KEY));
+const _setHandMode = v => localStorage.setItem(HAND_KEY, _normalizeHandMode(v));
+const FONT_KEY = 'weaverUIFont';
+const FONT_CHOICES = {
+  // Keep options clearly distinct even when Nunito webfont is unavailable.
+  avenir: "'Trebuchet MS', 'Segoe UI', system-ui, sans-serif",
+  nunito: "'Nunito', Georgia, 'Times New Roman', serif",
+  verdana: "'Roboto Mono', 'Courier New', 'Lucida Console', monospace",
+};
+
+function _getUiFontChoice() {
+  const stored = localStorage.getItem(FONT_KEY) || 'nunito';
+  return FONT_CHOICES[stored] ? stored : 'nunito';
+}
+
+function _applyUiFont(choice = _getUiFontChoice()) {
+  const safe = FONT_CHOICES[choice] ? choice : 'nunito';
+  document.documentElement.style.setProperty('--ui-font', FONT_CHOICES[safe]);
+  localStorage.setItem(FONT_KEY, safe);
+}
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 
@@ -117,11 +266,54 @@ function _requestImmersiveMode() {
 // Apply i18n to static labels
 function applyTranslations() {
   const set = (id, key) => { const el = _el(id); if (el) el.textContent = t(key); };
+  const setHtml = (id, key) => { const el = _el(id); if (el) el.innerHTML = t(key); };
   set('start-btn',          'play');
+  set('ss-settings-btn',    'startSettings');
   set('ss-signin-label',    'signIn');
   set('ss-bonus-badge',     'bonusBadge');
   set('restart-btn',        'playAgain');
+  set('market-page-title',  'market');
+  set('skins-page-title',   'skins');
+  set('settings-page-title','settingsTitle');
+  set('settings-sound-title', 'soundTitle');
+  set('settings-master-label', 'masterVolume');
+  set('settings-sfx-label', 'soundEffects');
+  set('settings-music-label', 'musicVolume');
+  set('settings-gameplay-title', 'gameplayTitle');
+  set('settings-ui-title', 'interfaceTitle');
+  set('settings-font-label', 'fontLabel');
+  set('settings-hand-label', 'handMode');
+  set('settings-account-title', 'account');
   set('settings-lang-title','language');
+  set('settings-signin-hint', 'signInHint');
+  setHtml('settings-bonus-hint', 'bonusHint');
+  set('settings-signin-label', 'signIn');
+  set('settings-version', 'version');
+  set('buy-random-btn', 'buyRandomSkin');
+  set('ss-buy-coins-note', 'buyCoinsHint');
+  const settingsSignOut = _el('settings-signout-btn');
+  if (settingsSignOut) settingsSignOut.textContent = `✕ ${t('signOut')}`;
+  const bestLabel = document.querySelector('#start-stats .ss-box:first-child .ss-label');
+  if (bestLabel) bestLabel.textContent = t('best');
+  const coinsLabel = document.querySelector('#start-stats .ss-box:last-child .ss-label');
+  if (coinsLabel) coinsLabel.textContent = t('coins');
+  const handSelect = _el('hand-mode-select');
+  if (handSelect?.options?.length >= 3) {
+    handSelect.options[0].textContent = t('handRight');
+    handSelect.options[1].textContent = t('handCenter');
+    handSelect.options[2].textContent = t('handLeft');
+  }
+  const fontSelect = _el('font-select');
+  if (fontSelect?.options?.length >= 3) {
+    fontSelect.options[0].textContent = t('fontAvenir');
+    fontSelect.options[1].textContent = t('fontNunito');
+    fontSelect.options[2].textContent = t('fontVerdana');
+  }
+  const gameOverTitle = document.querySelector('#gameover-box h2');
+  if (gameOverTitle) gameOverTitle.textContent = t('gameOver');
+  const goLabels = document.querySelectorAll('#gameover-box .go-label');
+  if (goLabels[0]) goLabels[0].textContent = t('score');
+  if (goLabels[1]) goLabels[1].textContent = t('coinsEarned');
   document.querySelectorAll('.nav-label').forEach(el => {
     const key = el.dataset.i18n;
     if (key) el.textContent = t(key);
@@ -129,12 +321,17 @@ function applyTranslations() {
 }
 applyTranslations();
 initAds(); // Reklam sistemini başlat — native cihazda ilk reklamı arka planda yükler
+window.addEventListener('pointerdown', () => { resumeAudio(); }, { once: true });
+window.addEventListener('keydown', () => { resumeAudio(); }, { once: true });
 
 function _updateStartScreen() {
   _el('ss-best').textContent  = Number(localStorage.getItem('weaverBest') ?? 0).toLocaleString();
   _el('ss-coins').textContent = economy.coins;
+  _updateRankBadges();
 }
 _updateStartScreen();
+_applyUiFont();
+prepareBackgroundMusic().catch(() => {});
 
 // ── Navigation ───────────────────────────────────────────────────────────────
 
@@ -143,7 +340,22 @@ const PAGE_ORDER = ['play', 'market', 'skins', 'settings'];
 let _currentPage = 'market';
 
 function showPage(name) {
-  if (name === _currentPage) return;
+  if (name === _currentPage) {
+    const currentEl = PAGES[name];
+
+    if (name === 'skins')    renderSkinsPage();
+    if (name === 'market')   renderMarketPage();
+    if (name === 'settings') renderSettingsPage();
+
+    if (currentEl?.classList.contains('hidden')) {
+      currentEl.classList.remove('hidden');
+    }
+
+    document.querySelectorAll('.nav-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.page === name)
+    );
+    return;
+  }
 
   const fromEl = PAGES[_currentPage];
   const toEl   = PAGES[name];
@@ -155,6 +367,12 @@ function showPage(name) {
   if (name === 'skins')    renderSkinsPage();
   if (name === 'market')   renderMarketPage();
   if (name === 'settings') renderSettingsPage();
+
+  Object.entries(PAGES).forEach(([key, el]) => {
+    if (key === _currentPage || key === name) return;
+    el.classList.add('hidden');
+    el.classList.remove('page--enter-right', 'page--enter-left', 'page--exit-left', 'page--exit-right');
+  });
 
   // Settings animasyonunu durdur çıkarken
   if (_currentPage === 'settings' && _settingsBgRaf) {
@@ -240,7 +458,11 @@ _el('mode-endless-btn').addEventListener('click', () => {
   _setVisible(mainApp, true);
   if (!game) game = new Game({ mode: 'endless' });
   else if (game._mode !== 'endless') game.restart({ mode: 'endless' });
-  showPage('play');
+  Object.entries(PAGES).forEach(([key, el]) => el.classList.toggle('hidden', key !== 'play'));
+  _currentPage = 'play';
+  document.querySelectorAll('.nav-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.page === 'play')
+  );
 });
 
 // 1v1 VS mode
@@ -263,6 +485,15 @@ const vsSession = (() => {
   let _myFinalScore = 0;
   let _countdownStarted = false;
   let _gameLaunched = false;
+  let _lastLocalMoveAt = Date.now();
+  let _finishRequested = false;
+  let _dragBound = false;
+  let _dragState = null;
+  let _myRankAtMatch = 0;
+  let _oppRankAtMatch = 0;
+  let _myLiveScore = 0;
+  let _oppLiveScore = 0;
+  let _rankAppliedForMatch = null;
 
   const _overlay = () => _el('vs-overlay');
   const _screen  = id => _el(id);
@@ -308,6 +539,172 @@ const vsSession = (() => {
     clearInterval(_syncInterval); _syncInterval = null;
     _countdownStarted = false;
     _gameLaunched = false;
+    _finishRequested = false;
+    _myLiveScore = 0;
+    _oppLiveScore = 0;
+  }
+
+  function _setDominanceVisible(visible) {
+    _el('vs-dominance')?.classList.toggle('hidden', !visible);
+  }
+
+  function _updateDominanceBar() {
+    const bar = _el('vs-dominance');
+    if (!bar || !game?._vsMode) return;
+
+    const diff = _myLiveScore - _oppLiveScore;
+    const abs = Math.abs(diff);
+    const gapTarget = _gapTargetByRanks(_matchData?.hostRankPoints, _matchData?.guestRankPoints);
+    const ratio = Math.max(0, Math.min(1, abs / Math.max(1, gapTarget)));
+
+    let myWidth = 50;
+    if (diff > 0) myWidth = 50 + ratio * 50;
+    else if (diff < 0) myWidth = 50 - ratio * 50;
+    const oppWidth = 100 - myWidth;
+
+    const myTier = _tierForRankPoints(_myRankAtMatch);
+    _el('vs-dom-blue').style.width = `${myWidth.toFixed(2)}%`;
+    _el('vs-dom-red').style.width = `${oppWidth.toFixed(2)}%`;
+    _el('vs-dom-blue-val').textContent = `SEN ${_myLiveScore.toLocaleString()}`;
+    _el('vs-dom-red-val').textContent = `RAKIP ${_oppLiveScore.toLocaleString()}`;
+
+    const leadText = diff === 0
+      ? 'DENGEDE'
+      : diff > 0
+      ? `SEN +${abs.toLocaleString()}`
+      : `RAKIP +${abs.toLocaleString()}`;
+    _el('vs-dom-center').textContent = `${myTier.label} HEDEF ${gapTarget.toLocaleString()} | ${leadText}`;
+  }
+
+  function _getOpponentUid() {
+    return _role === 'host' ? _matchData?.guest?.uid : _matchData?.host?.uid;
+  }
+
+  function _statePayload({ gameOver = false, loseReason = null } = {}) {
+    const board = game ? serializeBoard(game.grid) : '0'.repeat(64);
+    return {
+      score: game?.scoreSystem?.score ?? _myFinalScore ?? 0,
+      gameOver,
+      board,
+      lastMoveAt: _lastLocalMoveAt,
+      updatedAt: Date.now(),
+      loseReason,
+    };
+  }
+
+  function _syncMyState(opts = {}) {
+    if (!_matchId || !_role) return;
+    updatePlayerState(_matchId, _role, _statePayload(opts)).catch(() => {});
+  }
+
+  function _setOpponentPanelDefaults() {
+    const panel = _el('vs-opp-panel');
+    if (!panel) return;
+    panel.style.top = '58px';
+    panel.style.right = '8px';
+    panel.style.left = '';
+    panel.style.bottom = '';
+  }
+
+  function _bindOpponentPanelDrag() {
+    if (_dragBound) return;
+    _dragBound = true;
+    const panel = _el('vs-opp-panel');
+    const area = _el('game-area');
+    if (!panel || !area) return;
+
+    panel.addEventListener('pointerdown', e => {
+      const panelRect = panel.getBoundingClientRect();
+      _dragState = {
+        dx: e.clientX - panelRect.left,
+        dy: e.clientY - panelRect.top,
+      };
+      panel.setPointerCapture?.(e.pointerId);
+      panel.classList.add('vs-opp-panel--dragging');
+    });
+
+    panel.addEventListener('pointermove', e => {
+      if (!_dragState) return;
+      e.preventDefault();
+      const areaRect = area.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      const maxLeft = Math.max(0, areaRect.width - panelRect.width);
+      const maxTop = Math.max(0, areaRect.height - panelRect.height);
+      const nextLeft = Math.max(0, Math.min(maxLeft, e.clientX - areaRect.left - _dragState.dx));
+      const nextTop = Math.max(0, Math.min(maxTop, e.clientY - areaRect.top - _dragState.dy));
+      panel.style.left = `${Math.round(nextLeft)}px`;
+      panel.style.top = `${Math.round(nextTop)}px`;
+      panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
+    });
+
+    const endDrag = e => {
+      if (!_dragState) return;
+      _dragState = null;
+      panel.classList.remove('vs-opp-panel--dragging');
+      panel.releasePointerCapture?.(e.pointerId);
+    };
+
+    panel.addEventListener('pointerup', endDrag);
+    panel.addEventListener('pointercancel', endDrag);
+  }
+
+  function _isTimedOut(state, now) {
+    if (!state || state.gameOver) return false;
+    const lastMoveAt = Number(state.lastMoveAt ?? 0);
+    if (!lastMoveAt) return false;
+    return now - lastMoveAt > VS_MOVE_TIMEOUT_MS;
+  }
+
+  function _deriveWinner(data) {
+    const hostState = data?.hostState;
+    const guestState = data?.guestState;
+    if (!hostState || !guestState) return null;
+
+    const hostUid = data?.host?.uid;
+    const guestUid = data?.guest?.uid;
+    const hostScore = Number(hostState.score ?? 0);
+    const guestScore = Number(guestState.score ?? 0);
+
+    const now = Date.now();
+    const hostTimedOut = _isTimedOut(hostState, now);
+    const guestTimedOut = _isTimedOut(guestState, now);
+    if (hostTimedOut && !guestTimedOut) return guestUid;
+    if (guestTimedOut && !hostTimedOut) return hostUid;
+    if (hostTimedOut && guestTimedOut) return hostScore === guestScore ? 'tie' : (hostScore > guestScore ? hostUid : guestUid);
+
+    if (hostState.gameOver && !guestState.gameOver) return guestUid;
+    if (guestState.gameOver && !hostState.gameOver) return hostUid;
+
+    const gap = Math.abs(hostScore - guestScore);
+    const gapToWin = _gapTargetByRanks(data?.hostRankPoints, data?.guestRankPoints);
+    if (gap >= gapToWin) return hostScore > guestScore ? hostUid : guestUid;
+
+    if (hostState.gameOver && guestState.gameOver) {
+      if (hostScore === guestScore) return 'tie';
+      return hostScore > guestScore ? hostUid : guestUid;
+    }
+    return null;
+  }
+
+  function _maybeFinishByRules(data) {
+    if (!data || data.status !== 'active' || _finishRequested || data.winner) return;
+    const winner = _deriveWinner(data);
+    if (!winner || !_matchId) return;
+    _finishRequested = true;
+    finishMatch(_matchId, winner).catch(() => {
+      _finishRequested = false;
+    });
+  }
+
+  function _showLocalLoseImmediate(myScore) {
+    const liveOppScore = Number(_el('vs-opp-panel-score')?.textContent?.replace(/[^\d]/g, '') || 0);
+    _el('vs-result-icon').textContent  = '😢';
+    _el('vs-result-title').textContent = 'KAYBETTİN!';
+    _el('vs-my-final-score').textContent  = Number(myScore ?? 0).toLocaleString();
+    _el('vs-opp-final-score').textContent = liveOppScore.toLocaleString();
+    _overlay().classList.remove('hidden');
+    _showScreen('vs-screen-result');
   }
 
   // ── Countdown then launch ──────────────────────────────────────────────────
@@ -324,6 +721,9 @@ const vsSession = (() => {
     _el('vs-my-name').textContent  = _currentUser.displayName || 'Sen';
     _el('vs-opp-name').textContent = _oppName;
     _showScreen('vs-screen-countdown');
+    _lastLocalMoveAt = Date.now();
+    _myRankAtMatch = Number(_role === 'host' ? matchData?.hostRankPoints : matchData?.guestRankPoints) || _getRankPoints(_currentUser?.uid);
+    _oppRankAtMatch = Number(_role === 'host' ? matchData?.guestRankPoints : matchData?.hostRankPoints) || 0;
 
     let n = 3;
     const _tick = () => {
@@ -363,11 +763,18 @@ const vsSession = (() => {
     _el('vs-opp-panel-name').textContent  = _oppName;
     _el('vs-opp-panel-score').textContent = '0';
     _el('vs-opp-gameover').classList.add('hidden');
+    _setOpponentPanelDefaults();
+    _bindOpponentPanelDrag();
     oppPanel.classList.remove('hidden');
 
     // Draw empty mini board
     const oc = _el('vs-opp-canvas');
     drawMiniBoard(oc.getContext('2d'), '0'.repeat(64), oc.width, oc.height);
+    _myLiveScore = 0;
+    _oppLiveScore = 0;
+    _el('vs-rank-result').textContent = '';
+    _setDominanceVisible(true);
+    _updateDominanceBar();
 
     showPage('play');
 
@@ -378,22 +785,28 @@ const vsSession = (() => {
       ).catch(() => {});
     }
 
-    // Start syncing my state every 1.5s
+    _lastLocalMoveAt = Date.now();
+    _syncMyState({ gameOver: false, loseReason: null });
+
+    // Start syncing my state rapidly for near realtime opponent tracking
     _syncInterval = setInterval(() => {
       if (!game || !_matchId) return;
-      const board = serializeBoard(game.grid);
-      updatePlayerState(_matchId, _role, {
-        score:    game.scoreSystem.score,
-        gameOver: game._isGameOver ?? false,
-        board,
-      }).catch(() => {});
-    }, 1500);
+      if (!game._isGameOver && (Date.now() - _lastLocalMoveAt) > VS_MOVE_TIMEOUT_MS) {
+        game._gameOver();
+        return;
+      }
+      _syncMyState({ gameOver: game._isGameOver ?? false });
+    }, VS_STATE_SYNC_MS);
   }
 
   // ── Handle incoming match snapshot ────────────────────────────────────────
 
   function _onMatchSnapshot(data) {
     _matchData = data;
+    if (_role) {
+      _myRankAtMatch = Number(_role === 'host' ? data?.hostRankPoints : data?.guestRankPoints) || _myRankAtMatch || _getRankPoints(_currentUser?.uid);
+      _oppRankAtMatch = Number(_role === 'host' ? data?.guestRankPoints : data?.hostRankPoints) || _oppRankAtMatch || 0;
+    }
 
     if (data.status === 'countdown') {
       _startCountdown(data);
@@ -415,12 +828,17 @@ const vsSession = (() => {
     if (data.status === 'active' || data.status === 'countdown') {
       const oppState = _role === 'host' ? data.guestState : data.hostState;
       if (oppState) {
-        _el('vs-opp-panel-score').textContent = (oppState.score ?? 0).toLocaleString();
+        _oppLiveScore = Number(oppState.score ?? 0);
+        _el('vs-opp-panel-score').textContent = _oppLiveScore.toLocaleString();
         const oc = _el('vs-opp-canvas');
         if (oc && oppState.board) drawMiniBoard(oc.getContext('2d'), oppState.board, oc.width, oc.height);
         if (oppState.gameOver) _el('vs-opp-gameover').classList.remove('hidden');
       }
+      _myLiveScore = Number(game?.scoreSystem?.score ?? _myLiveScore ?? 0);
+      _updateDominanceBar();
     }
+
+    _maybeFinishByRules(data);
 
     // Both game-over → show result
     if (data.status === 'finished') {
@@ -434,25 +852,24 @@ const vsSession = (() => {
   function reportGameOver(myScore) {
     _myFinalScore = myScore;
     if (!_matchId) return;
-    const board = game ? serializeBoard(game.grid) : '0'.repeat(64);
-    updatePlayerState(_matchId, _role, { score: myScore, gameOver: true, board }).catch(() => {});
+    _syncMyState({ gameOver: true, loseReason: 'no_moves' });
 
-    // Check if opponent already game-over → determine winner
-    const oppState = _role === 'host' ? _matchData?.guestState : _matchData?.hostState;
-    if (oppState?.gameOver) {
-      const oppScore = oppState.score ?? 0;
-      const winner   = myScore >= oppScore ? _currentUser.uid : (
-        _role === 'host' ? _matchData?.guest?.uid : _matchData?.host?.uid
-      );
-      finishMatch(_matchId, winner ?? 'tie').catch(() => {});
-    }
-    // else wait for opponent's game-over
+    // No-move defeat is immediate for the local player.
+    _showLocalLoseImmediate(myScore);
+
+    const opponentUid = _getOpponentUid();
+    if (!opponentUid) return;
+    _finishRequested = true;
+    finishMatch(_matchId, opponentUid).catch(() => {
+      _finishRequested = false;
+    });
   }
 
   // ── Show result screen ─────────────────────────────────────────────────────
 
   function _showResult(data) {
     _el('vs-opp-panel').classList.add('hidden');
+    _setDominanceVisible(false);
     const myUid  = _currentUser?.uid;
     const isWin  = data.winner === myUid;
     const isTie  = data.winner === 'tie';
@@ -465,12 +882,30 @@ const vsSession = (() => {
     _el('vs-my-final-score').textContent  = (myState?.score  ?? 0).toLocaleString();
     _el('vs-opp-final-score').textContent = (oppState?.score ?? 0).toLocaleString();
 
+    if (_rankAppliedForMatch !== _matchId) {
+      _rankAppliedForMatch = _matchId;
+      const myRank = _getRankPoints(_currentUser?.uid);
+      const delta = _rankDeltaForResult(myRank, _oppRankAtMatch, isWin, isTie);
+      const next = _setRankPoints(myRank + delta, _currentUser?.uid);
+      _updateRankBadges(_currentUser?.uid);
+      const tier = _tierForRankPoints(next);
+      const sign = delta > 0 ? '+' : '';
+      _el('vs-rank-result').textContent = `RANK: ${myRank} ${sign}${delta} = ${next} (${tier.label})`;
+      if (_currentUser) saveCloudSave(_currentUser.uid, _cloudSavePayload()).catch(() => {});
+    } else {
+      const current = _getRankPoints(_currentUser?.uid);
+      _updateRankBadges(_currentUser?.uid);
+      const tier = _tierForRankPoints(current);
+      _el('vs-rank-result').textContent = `RANK: ${current} (${tier.label})`;
+    }
+
     _overlay().classList.remove('hidden');
     _showScreen('vs-screen-result');
   }
 
   function _exitToMenu() {
     _el('vs-opp-panel').classList.add('hidden');
+    _setDominanceVisible(false);
     _setVisible(mainApp, false);
     _setVisible(startScreen, true);
     _updateStartScreen();
@@ -489,7 +924,7 @@ const vsSession = (() => {
     try {
       _countdownStarted = false;
       _gameLaunched = false;
-      const result = await quickMatch(_currentUser);
+      const result = await quickMatch(_currentUser, _getRankPoints(_currentUser.uid));
       _matchId = result.matchId;
       _seed    = result.seed;
       _role    = result.role;
@@ -517,7 +952,9 @@ const vsSession = (() => {
     try {
       _countdownStarted = false;
       _gameLaunched = false;
-      const result = await createMatch(_currentUser);
+      const result = await createMatch(_currentUser, {
+        rankPoints: _getRankPoints(_currentUser.uid),
+      });
       _matchId = result.matchId;
       _seed    = result.seed;
       _role    = 'host';
@@ -557,7 +994,7 @@ const vsSession = (() => {
     try {
       _countdownStarted = false;
       _gameLaunched = false;
-      const result = await joinMatchByCode(code, _currentUser);
+      const result = await joinMatchByCode(code, _currentUser, _getRankPoints(_currentUser.uid));
       _matchId = result.matchId;
       _seed    = result.seed;
       _role    = 'guest';
@@ -585,16 +1022,25 @@ const vsSession = (() => {
     _exitToMenu();
   });
 
-  return { openLobby, reportGameOver };
+  function markLocalMove() {
+    _lastLocalMoveAt = Date.now();
+    _syncMyState({ gameOver: false, loseReason: null });
+  }
+
+  function updateMyLiveScore(score) {
+    _myLiveScore = Number(score ?? 0);
+    _updateDominanceBar();
+  }
+
+  return { openLobby, reportGameOver, markLocalMove, updateMyLiveScore };
 })();
 
 // ── Settings button ───────────────────────────────────────────────────────────
 
 _el('ss-settings-btn').addEventListener('click', () => {
+  showPage('settings');
   _setVisible(startScreen, false);
   _setVisible(mainApp, true);
-  if (!game) game = new Game();
-  showPage('settings');
 });
 
 // ── Restart ───────────────────────────────────────────────────────────────────
@@ -654,15 +1100,12 @@ _el('ss-watch-ad-btn')?.addEventListener('click', async () => {
 // ── Buy Coins button → open market page ──────────────────────────────────────
 
 _el('ss-buy-coins-btn')?.addEventListener('click', () => {
+  showPage('market');
   _setVisible(startScreen, false);
   _setVisible(mainApp, true);
-  if (!game) game = new Game();
-  showPage('market');
 });
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
-
-let _currentUser = null;
 
 // Strip size suffix from Google photo URLs and force =s96-c for consistent rendering
 function _avatarUrl(url) {
@@ -681,6 +1124,7 @@ function _applyAuthUI(user) {
     _el('ss-avatar').src              = _avatarUrl(user.photoURL);
     _el('ss-username').textContent    = user.displayName || user.email;
   }
+  _updateRankBadges(user?.uid);
 
   // Mode select sheet VS button state
   _updateModeSelectUI();
@@ -719,10 +1163,17 @@ async function _handleSignIn() {
 async function _handleSignOut(e) {
   e?.preventDefault();
   e?.stopPropagation();
+  const startBtn = _el('ss-signout-btn');
+  const settingsBtn = _el('settings-signout-btn');
   try {
+    if (startBtn) startBtn.disabled = true;
+    if (settingsBtn) settingsBtn.disabled = true;
     await googleSignOut();
   } catch (err) {
-    // Ignore sign-out errors — UI will update via onAuthStateChanged
+    _applyAuthUI(null);
+  } finally {
+    if (startBtn) startBtn.disabled = false;
+    if (settingsBtn) settingsBtn.disabled = false;
   }
 }
 
@@ -730,24 +1181,38 @@ _el('ss-signin-btn').addEventListener('click', _handleSignIn);
 _el('ss-signout-btn').addEventListener('click', _handleSignOut);
 
 // Auth state listener
+let _lastAuthUid = null;
 onAuthChange(async user => {
+  const prevUid = _lastAuthUid;
+  _lastAuthUid = user?.uid ?? null;
   _applyAuthUI(user);
+
+  if (user && !prevUid) _captureGuestSnapshot();
+  if (!user && prevUid) {
+    _restoreGuestSnapshot();
+    return;
+  }
+
   if (user) {
-    // Load cloud save and merge (cloud wins on higher values)
+    // Load cloud save and apply account state for signed-in user.
     try {
       const cloud = await loadCloudSave(user.uid);
       if (cloud) {
-        if ((cloud.coins ?? 0) > economy.coins) {
-          economy.coins = cloud.coins;
-          economy._save();
+        if (typeof cloud.coins === 'number') economy.coins = Math.max(0, cloud.coins);
+        if (Array.isArray(cloud.unlockedIds)) economy.unlockedIds = new Set(cloud.unlockedIds);
+        economy.unlockedIds.add('classic');
+        if (cloud.activeSkinId && economy.unlockedIds.has(cloud.activeSkinId)) {
+          economy.activeSkinId = cloud.activeSkinId;
         }
-        if (cloud.bestScore) {
-          const local = Number(localStorage.getItem('weaverBest') ?? 0);
-          if (cloud.bestScore > local) localStorage.setItem('weaverBest', cloud.bestScore);
+        economy._save();
+        if (typeof cloud.bestScore === 'number') localStorage.setItem('weaverBest', String(cloud.bestScore));
+        if (typeof cloud.rankPoints === 'number') {
+          _setRankPoints(cloud.rankPoints, user.uid);
+          _updateRankBadges(user.uid);
         }
-        if (cloud.unlockedIds) {
-          cloud.unlockedIds.forEach(id => economy.unlockedIds.add(id));
-          economy._save();
+        if (game) {
+          game.renderer.setSkin(economy.getActiveSkin());
+          game._renderTray();
         }
         updateCoinDisplays();
       }
@@ -781,23 +1246,30 @@ function _cloudSavePayload() {
     unlockedIds:  [...economy.unlockedIds],
     activeSkinId: economy.activeSkinId,
     bestScore:    Number(localStorage.getItem('weaverBest') ?? 0),
+    rankPoints:   _getRankPoints(_currentUser?.uid),
   };
 }
 
 // ── Settings page ─────────────────────────────────────────────────────────────
 
 function renderSettingsPage() {
-  // Volume slider
-  const slider = _el('sfx-volume-slider');
-  const label  = _el('sfx-volume-val');
-  const v = Math.round(getSfxVolume() * 100);
-  slider.value      = v;
-  label.textContent = `${v}%`;
-  slider.oninput = () => {
-    const pct = Number(slider.value);
-    label.textContent = `${pct}%`;
-    setSfxVolume(pct / 100);
+  const bindVolumeSlider = (sliderId, labelId, getter, setter) => {
+    const slider = _el(sliderId);
+    const label = _el(labelId);
+    if (!slider || !label) return;
+    const value = Math.round(getter() * 100);
+    slider.value = value;
+    label.textContent = `${value}%`;
+    slider.oninput = () => {
+      const pct = Number(slider.value);
+      label.textContent = `${pct}%`;
+      setter(pct / 100);
+    };
   };
+
+  bindVolumeSlider('master-volume-slider', 'master-volume-val', getMasterVolume, setMasterVolume);
+  bindVolumeSlider('sfx-volume-slider', 'sfx-volume-val', getSfxVolume, setSfxVolume);
+  bindVolumeSlider('music-volume-slider', 'music-volume-val', getMusicVolume, setMusicVolume);
 
   // Language grid
   const langGrid = _el('settings-lang-grid');
@@ -835,6 +1307,14 @@ function renderSettingsPage() {
     handSelect.onchange = () => {
       _setHandMode(handSelect.value);
       if (game?.renderer) game.renderer.setHandedness(_getHandMode());
+    };
+  }
+
+  const fontSelect = _el('font-select');
+  if (fontSelect) {
+    fontSelect.value = _getUiFontChoice();
+    fontSelect.onchange = () => {
+      _applyUiFont(fontSelect.value);
     };
   }
 
@@ -916,10 +1396,8 @@ function _startSettingsBgAnimation() {
     }
     _settingsBgRaf = requestAnimationFrame(tick);
   };
-  _settingsBgRaf = requestAnimationFrame(tick);
+  tick();
 }
-
-
 
 // ── Skin reveal slot-machine animation ───────────────────────────────────────
 
@@ -1105,14 +1583,23 @@ function updateCoinDisplays() {
 }
 
 let _toastTimer = null;
+const _isDebugToastMode = () => {
+  try {
+    if (new URLSearchParams(window.location.search).get('debugToasts') === '1') return true;
+  } catch {}
+  return localStorage.getItem('weaverDebugToasts') === 'true';
+};
+
 function showToast(msg, { error = false } = {}) {
   toastEl.textContent = msg;
   toastEl.classList.toggle('toast--error', error);
+  toastEl.classList.toggle('toast--debug-error', error && _isDebugToastMode());
   toastEl.classList.add('show');
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => {
     toastEl.classList.remove('show');
     toastEl.classList.remove('toast--error');
+    toastEl.classList.remove('toast--debug-error');
   }, error ? 4000 : 1500);
 }
 
@@ -1423,6 +1910,7 @@ class Game {
       this.comboEl.textContent = `x${ss.comboMultiplier}`;
       this._updateComboVisual(ss.comboMultiplier);
       this._updateColorCap(ss.score);
+      if (this._vsMode) vsSession.updateMyLiveScore(ss.score);
     });
     this._updateComboVisual(1);
 
@@ -1664,13 +2152,18 @@ class Game {
 
   _updateComboVisual(mult) {
     const m = Math.max(1, Math.min(10, mult));
-    const t = (m - 1) / 9;
-    const hue = 130 - t * 122; // green -> red
-    const color = `hsl(${hue}, 90%, 56%)`;
+    let color = '#22c55e'; // x1 green
+    if (m === 2) color = '#facc15'; // x2 yellow
+    else if (m === 3) color = '#ef4444'; // x3 red
+    else if (m >= 4) color = '#a855f7'; // x4+ purple
     this.comboEl.style.setProperty('--combo-color', color);
-    this.comboEl.style.textShadow = `0 0 8px hsla(${hue}, 95%, 56%, 0.45)`;
-    this.comboEl.classList.toggle('combo-hot', m >= 5);
-    this.comboEl.classList.toggle('combo-burn', m >= 7);
+    this.comboEl.classList.toggle('combo-active', m >= 2);
+  }
+
+  _triggerComboFire() {
+    this.comboEl.classList.remove('combo-fired');
+    void this.comboEl.offsetWidth;
+    this.comboEl.classList.add('combo-fired');
   }
 
   // ── Tray ───────────────────────────────────────────────────────────────────
@@ -1741,6 +2234,7 @@ class Game {
     for (const { row: r, col: c } of positions) snap[`${r},${c}`] = block.colorID;
     this.placements++;
     playPlace();
+    if (this._vsMode) vsSession.markLocalMove();
 
     const idx = this.tray.findIndex(b => b?.id === block.id);
     if (idx !== -1) this._markUsed(idx);
@@ -1773,11 +2267,15 @@ class Game {
         }
         this.scoreSystem._emit();
         this.particles.spawnScoreFloat(result.cleared, CLEAN_BONUS_POINTS, 'CLEAN!', PALETTE, snap);
+        playClean();
         showToast('CLEAN! ✨');
       }
 
       const coinsEarned = this._checkCoins(this.scoreSystem.score);
       showGainFloat({ scoreDelta: totalGain, coins: coinsEarned });
+      this._triggerComboFire();
+    } else {
+      this.scoreSystem.breakCombo();
     }
 
     this._handleTutorialAfterClear(result);

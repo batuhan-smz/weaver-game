@@ -51,11 +51,13 @@ export class Renderer {
     this.fxCtx      = fxCanvas.getContext('2d');
     this.skin       = _fallbackSkin;
     this.CELL = 30; this.GAP = 2; this.PADDING = 4; this.RADIUS = 4;
+    this.BOARD_OFFSET_X = 0;
+    this.BOARD_OFFSET_Y = 0;
     this.tweens   = new Map();
     this.dragging = null;
     this._dragProxy = null;
     this.dragEnabled = true;
-    this._handedness = 'right';
+    this._handedness = 'center';
     this.onDrop   = null;
     this._getBlockForIndex = () => null;
     this._ghostState = null; // { block, row, col, canPlace }
@@ -69,14 +71,18 @@ export class Renderer {
     this.GAP     = Math.max(2, Math.floor(S * 0.008));
     this.PADDING = Math.max(2, Math.floor(S * 0.008));
     this.CELL    = Math.floor((S - this.PADDING*2 - this.GAP*(N-1)) / N);
+    const boardPx = this.PADDING * 2 + this.CELL * N + this.GAP * (N - 1);
+    const rest = Math.max(0, S - boardPx);
+    this.BOARD_OFFSET_X = Math.floor(rest / 2);
+    this.BOARD_OFFSET_Y = Math.floor(rest / 2);
     this.RADIUS  = Math.max(3, Math.floor(this.CELL * 0.12));
     this._drawGrid();
   }
 
   setSkin(skin) { this.skin = skin; this._drawGrid(); }
 
-  _cellX(col) { return this.PADDING + col * (this.CELL + this.GAP); }
-  _cellY(row) { return this.PADDING + row * (this.CELL + this.GAP); }
+  _cellX(col) { return this.BOARD_OFFSET_X + this.PADDING + col * (this.CELL + this.GAP); }
+  _cellY(row) { return this.BOARD_OFFSET_Y + this.PADDING + row * (this.CELL + this.GAP); }
 
   _drawGrid() {
     // Fill entire canvas with gap colour first so inter-cell gaps are always clean
@@ -183,8 +189,8 @@ export class Renderer {
 
   /**
    * Given a raw (row,col) under the finger, find the nearest grid position
-   * where `block` can be placed. Searches outward in a spiral up to `maxDist`
-   * cells away. Returns {row, col, canPlace} with canPlace=false if nothing fits.
+   * where `block` can be placed. Searches outward up to `maxDist` cells.
+   * Returns {row, col, canPlace:true} or null when no nearby fit exists.
    */
   _snapToNearest(block, rawRow, rawCol, maxDist = 5) {
     // Fast path: exact position fits
@@ -205,8 +211,16 @@ export class Renderer {
       }
     }
     if (best) return { ...best, canPlace: true };
-    // Nothing fits nearby — show red ghost at raw position
-    return { row: Math.max(0, Math.min(Grid.SIZE - 1, rawRow)), col: Math.max(0, Math.min(Grid.SIZE - 1, rawCol)), canPlace: false };
+    return null;
+  }
+
+  _hasAnyPlacement(block) {
+    for (let row = 0; row < Grid.SIZE; row++) {
+      for (let col = 0; col < Grid.SIZE; col++) {
+        if (this.grid.canPlace(block.getAbsolutePositions(row, col))) return true;
+      }
+    }
+    return false;
   }
 
   _updateGhostFromPoint(x, y) {
@@ -234,14 +248,23 @@ export class Renderer {
     // Follow finger directly (no lift/no nearest-fit snapping).
     const canvasX = (x + offX - rect.left) * scaleX;
     const canvasY = (y + offY - rect.top)  * scaleY;
-    const rawRow  = Math.floor((canvasY - this.PADDING) / step - bb.rows / 2);
-    const rawCol  = Math.floor((canvasX - this.PADDING) / step - bb.cols / 2);
+    const rawRow  = Math.floor((canvasY - this.BOARD_OFFSET_Y - this.PADDING) / step - bb.rows / 2);
+    const rawCol  = Math.floor((canvasX - this.BOARD_OFFSET_X - this.PADDING) / step - bb.cols / 2);
 
-    const positions = this.dragging.block.getAbsolutePositions(rawRow, rawCol);
-    const canPlace  = this.grid.canPlace(positions);
+    const block = this.dragging.block;
+    if (!this._hasAnyPlacement(block)) {
+      this._lastSnap = null;
+      this.drawGhostAndHover(null, -1, -1, false);
+      return;
+    }
 
-    this._lastSnap = { row: rawRow, col: rawCol, canPlace };
-    this.drawGhostAndHover(this.dragging.block, rawRow, rawCol, canPlace);
+    const snapped = this._snapToNearest(block, rawRow, rawCol, 2);
+    this._lastSnap = snapped;
+    if (!snapped) {
+      this.drawGhostAndHover(null, -1, -1, false);
+      return;
+    }
+    this.drawGhostAndHover(block, snapped.row, snapped.col, true);
   }
 
   _ensureDragProxy(block, sourceEl) {
@@ -355,7 +378,7 @@ export class Renderer {
         r: Math.max(rect.width, rect.height) * 0.56,
       };
       const thumbOffset = isTouch
-        ? (this._handedness === 'left' ? { x: 46, y: -82 } : { x: -46, y: -82 })
+        ? (this._handedness === 'left' ? { x: 46, y: -82 } : this._handedness === 'right' ? { x: -46, y: -82 } : { x: 0, y: -82 })
         : { x: -18, y: -20 };
       this.dragging = {
         block,
@@ -382,8 +405,8 @@ export class Renderer {
     const scaleY = this.gridCanvas.height / rect.height;
     const px = (sx - rect.left) * scaleX;
     const py = (sy - rect.top)  * scaleY;
-    const col = Math.floor((px - this.PADDING) / (this.CELL + this.GAP));
-    const row = Math.floor((py - this.PADDING) / (this.CELL + this.GAP));
+    const col = Math.floor((px - this.BOARD_OFFSET_X - this.PADDING) / (this.CELL + this.GAP));
+    const row = Math.floor((py - this.BOARD_OFFSET_Y - this.PADDING) / (this.CELL + this.GAP));
     if (row<0||row>=Grid.SIZE||col<0||col>=Grid.SIZE) return {row:-1,col:-1};
     return {row, col};
   }
@@ -391,7 +414,7 @@ export class Renderer {
   setBlockProvider(fn) { this._getBlockForIndex = fn; }
 
   setHandedness(mode) {
-    this._handedness = mode === 'left' ? 'left' : 'right';
+    this._handedness = (mode === 'left' || mode === 'right') ? mode : 'center';
   }
 
   setDragEnabled(enabled) {
