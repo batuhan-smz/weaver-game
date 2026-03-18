@@ -275,3 +275,91 @@ export function subscribeMatch(matchId, cb) {
   });
   return () => _unsub();
 }
+
+// ── Voice signaling (WebRTC over Firestore) ─────────────────────────────────
+
+function _voiceSignalRef(s, matchId) {
+  return s.doc(s.db, 'matches', matchId, 'voice', 'signal');
+}
+
+function _voiceCandidatesCol(s, matchId) {
+  return s.collection(s.db, 'matches', matchId, 'voiceCandidates');
+}
+
+export async function clearVoiceSignal(matchId) {
+  const s = await getFirebaseServices();
+  await s.setDoc(_voiceSignalRef(s, matchId), {
+    offer: null,
+    offerAt: 0,
+    answer: null,
+    answerAt: 0,
+    hostMicEnabled: false,
+    guestMicEnabled: false,
+    updatedAt: Date.now(),
+  }, { merge: true });
+}
+
+export async function publishVoiceOffer(matchId, sdp) {
+  const s = await getFirebaseServices();
+  await s.setDoc(_voiceSignalRef(s, matchId), {
+    offer: sdp,
+    offerAt: Date.now(),
+    answer: null,
+    answerAt: 0,
+    updatedAt: Date.now(),
+  }, { merge: true });
+}
+
+export async function publishVoiceAnswer(matchId, sdp) {
+  const s = await getFirebaseServices();
+  await s.setDoc(_voiceSignalRef(s, matchId), {
+    answer: sdp,
+    answerAt: Date.now(),
+    updatedAt: Date.now(),
+  }, { merge: true });
+}
+
+export async function setVoiceMicState(matchId, role, enabled) {
+  const s = await getFirebaseServices();
+  const field = role === 'host' ? 'hostMicEnabled' : 'guestMicEnabled';
+  await s.setDoc(_voiceSignalRef(s, matchId), {
+    [field]: !!enabled,
+    updatedAt: Date.now(),
+  }, { merge: true });
+}
+
+export function subscribeVoiceSignal(matchId, cb) {
+  let _unsub = () => {};
+  getFirebaseServices().then(s => {
+    _unsub = s.onSnapshot(_voiceSignalRef(s, matchId), snap => {
+      cb(snap.exists() ? (snap.data() || {}) : {});
+    });
+  });
+  return () => _unsub();
+}
+
+export async function sendVoiceCandidate(matchId, role, candidate) {
+  if (!candidate) return;
+  const s = await getFirebaseServices();
+  const col = _voiceCandidatesCol(s, matchId);
+  const ref = s.doc(col);
+  await s.setDoc(ref, {
+    role,
+    candidate,
+    createdAt: Date.now(),
+  });
+}
+
+export function subscribeVoiceCandidates(matchId, fromRole, cb) {
+  let _unsub = () => {};
+  getFirebaseServices().then(s => {
+    _unsub = s.onSnapshot(_voiceCandidatesCol(s, matchId), snap => {
+      const rows = snap.docs
+        .map(d => ({ id: d.id, ...(d.data() || {}) }))
+        .filter(row => row.role === fromRole)
+        .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
+      cb(rows);
+    });
+  });
+  return () => _unsub();
+}

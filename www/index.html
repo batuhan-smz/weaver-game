@@ -15,8 +15,52 @@
 </head>
 <body>
 
+  <div id="boot-loader" aria-live="polite" aria-label="Yukleniyor">
+    <div class="boot-loader-inner">
+      <div class="boot-block-spin" aria-hidden="true">
+        <span></span><span></span><span></span><span></span>
+      </div>
+      <div class="boot-loader-text">Yukleniyor...</div>
+    </div>
+  </div>
+
+  <div id="tutorial-completion-msg" class="hidden" aria-live="polite">
+    <div class="tutorial-completion-spinner" aria-hidden="true">
+      <span></span><span></span><span></span><span></span>
+    </div>
+    <div class="tutorial-completion-text">EĞİTİCİ TAMAMLANDI! 🎉</div>
+  </div>
+
   <!-- ══════════ START SCREEN ══════════ -->
   <div id="start-screen">
+    <button id="ss-friends-btn" class="ss-corner-btn hidden" aria-label="Arkadaslar">👥</button>
+    <div id="friends-panel" class="hidden" aria-live="polite">
+      <div class="friends-panel-head">
+        <span id="friends-panel-title">Arkadaslar</span>
+        <button id="friends-panel-close-btn" aria-label="Kapat">✕</button>
+      </div>
+      <div id="friends-requests"></div>
+      <div id="friends-list"></div>
+      <div id="friends-chat-panel" class="hidden">
+        <div class="friends-chat-head">
+          <button id="friends-chat-back-btn" type="button" aria-label="Geri">←</button>
+          <span id="friends-chat-title">Sohbet</span>
+        </div>
+        <div id="friends-chat-messages"></div>
+        <div class="friends-chat-input-row">
+          <input id="friends-chat-input" maxlength="320" autocomplete="off" placeholder="Mesaj yaz..." />
+          <button id="friends-chat-send-btn" type="button">Gonder</button>
+        </div>
+      </div>
+    </div>
+    <div id="vs-invite-notice" class="hidden" aria-live="polite">
+      <div class="vs-invite-title">VS Daveti</div>
+      <div id="vs-invite-text" class="vs-invite-text">Bir arkadasin seni VS maca davet etti.</div>
+      <div class="vs-invite-actions">
+        <button id="vs-invite-accept-btn" type="button">Kabul</button>
+        <button id="vs-invite-reject-btn" type="button">Reddet</button>
+      </div>
+    </div>
     <div id="start-logo">
       <div class="logo-icon">
         <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -59,7 +103,7 @@
       </button>
       <button id="ss-buy-coins-btn" class="ss-earn-btn ss-earn-btn--buy">
         <span>🪙 Altın Al</span>
-        <span class="earn-reward earn-reward--infinite">+∞</span>
+        <span class="earn-reward earn-reward--infinite"><span class="infinity-glyph">∞</span></span>
       </button>
     </div>
     <button id="ss-signin-btn">
@@ -88,12 +132,29 @@
         <span class="mode-card-tag" id="mode-vs-tag">GİRİŞ YAP</span>
       </button>
       <button id="mode-endless-btn" class="mode-card mode-card--endless">
-        <span class="mode-card-icon">∞</span>
+        <span class="mode-card-icon"><span class="infinity-glyph">∞</span></span>
         <div class="mode-card-info">
           <div class="mode-card-name">Sonsuz Mod</div>
           <div class="mode-card-desc">Ne kadar süre dayanabilirsin?</div>
         </div>
       </button>
+      <button id="mode-challenge-btn" class="mode-card mode-card--challenge">
+        <span class="mode-card-icon">🏁</span>
+        <div class="mode-card-info">
+          <div class="mode-card-name">Meydan Okuma</div>
+          <div class="mode-card-desc">Seviye bulmacalarını temizle</div>
+        </div>
+      </button>
+      <div id="challenge-board" class="challenge-board">
+        <div class="challenge-board-col">
+          <div class="challenge-board-title">YEREL EN İYİ</div>
+          <div id="challenge-local-board" class="challenge-board-list"></div>
+        </div>
+        <div class="challenge-board-col">
+          <div class="challenge-board-title">GLOBAL EN İYİ</div>
+          <div id="challenge-global-board" class="challenge-board-list"></div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -186,6 +247,41 @@
           <div class="hbox"><span class="hlabel">BEST</span><span id="best-display">0</span></div>
           <div id="play-rank-pill" class="rank-summary-pill rank-summary-pill--compact">BRONZ • 0 RP</div>
       </div>
+      <button id="vs-menu-toggle-btn" class="hidden" aria-label="VS Menu">☰</button>
+      <div id="vs-menu-panel" class="hidden" aria-label="VS Dropdown Menu">
+        <button id="vs-add-friend-btn" class="vs-menu-btn">
+          <span class="vs-menu-icon vs-menu-icon--friend-plus" aria-hidden="true">👤+</span>
+          <span id="vs-add-friend-label" class="vs-menu-label">Arkadaş Ekle</span>
+        </button>
+        <button id="vs-report-btn" class="vs-menu-btn">
+          <span class="vs-menu-icon vs-menu-icon--alert" aria-hidden="true">!</span>
+          <span id="vs-report-label" class="vs-menu-label">Bildir</span>
+        </button>
+        <button id="vs-voice-btn" class="vs-menu-btn">
+          <span class="vs-menu-icon vs-menu-icon--mic is-muted" aria-hidden="true">🎤</span>
+          <span id="vs-voice-label" class="vs-menu-label">Sesli Sohbet</span>
+        </button>
+        <button id="vs-surrender-btn" class="vs-menu-btn vs-menu-btn--danger">
+          <span id="vs-surrender-label" class="vs-menu-label">Teslim Ol</span>
+        </button>
+      </div>
+      <div id="vs-friend-request-toast" class="hidden" aria-live="polite">
+        <div class="vs-fr-title">Arkadaslik istegi</div>
+        <div id="vs-fr-name" class="vs-fr-name">Rakip</div>
+        <div class="vs-fr-actions">
+          <button id="vs-fr-accept-btn" type="button">Kabul</button>
+          <button id="vs-fr-reject-btn" type="button">Reddet</button>
+        </div>
+      </div>
+      <div id="tutorial-overlay" class="hidden" aria-live="polite">
+        <div id="tutorial-card">
+          <div id="tutorial-step">EGITICI 1/6</div>
+          <div id="tutorial-progress"></div>
+          <div id="tutorial-step-anim" aria-hidden="true"></div>
+          <div id="tutorial-desc"></div>
+          <button id="tutorial-skip-btn" type="button">Atla</button>
+        </div>
+      </div>
       <div id="game-area">
         <div id="vs-dominance" class="hidden" aria-live="polite">
           <div class="vs-dominance-track">
@@ -211,11 +307,12 @@
           <canvas id="grid-canvas"></canvas>
           <canvas id="fx-canvas"></canvas>
           <div id="float-layer"></div>
-          <div id="tutorial-overlay" class="hidden" aria-live="polite">
-            <div id="tutorial-card">
-              <div id="tutorial-step">ADIM 1/2</div>
-              <div id="tutorial-text">Kırmızı bloğu işaretli hücreye sürükleyip bırak.</div>
-            </div>
+        </div>
+        <div id="vs-chat-panel" class="hidden">
+          <div id="vs-chat-messages"></div>
+          <div class="vs-chat-input-row">
+            <input id="vs-chat-input" maxlength="240" autocomplete="off" placeholder="Mesaj yaz..." />
+            <button id="vs-chat-send-btn">Gonder</button>
           </div>
         </div>
       </div>
@@ -265,6 +362,7 @@
     <div id="page-settings" class="page hidden">
       <canvas id="settings-bg-canvas"></canvas>
       <div id="settings-header">
+        <button id="settings-back-btn" class="settings-back-btn" aria-label="Back">←</button>
         <h2 id="settings-page-title">SETTINGS</h2>
       </div>
       <div id="settings-body">
@@ -344,12 +442,13 @@
                 <span id="settings-rank-badge" class="rank-pill rank-pill--settings">BRONZ • 0 RP</span>
               </div>
             </div>
+            <button id="settings-edit-profile-btn" class="settings-btn">Profili Duzenle</button>
             <button id="settings-signout-btn" class="settings-btn settings-btn--danger">✕ Çıkış Yap</button>
           </div>
         </div>
 
         <!-- Language section -->
-        <div class="settings-section">
+        <div class="settings-section" id="settings-lang-section">
           <div class="settings-section-title" id="settings-lang-title">🌐 LANGUAGE</div>
           <div id="settings-lang-grid" class="settings-lang-grid"></div>
         </div>
@@ -414,6 +513,63 @@
   <!-- ══════════ OVERLAYS ══════════ -->
   <div id="feedback-toast"></div>
 
+  <div id="profile-setup-overlay" class="hidden" aria-live="polite">
+    <div id="profile-setup-card">
+      <div class="profile-setup-title">Profil Olustur</div>
+      <label class="profile-field">
+        <span>Gorunen Ad</span>
+        <input id="profile-display-name-input" maxlength="32" placeholder="Ad Soyad" />
+      </label>
+      <label class="profile-field">
+        <span>Dogum Tarihi</span>
+        <input id="profile-birthdate-input" type="date" />
+      </label>
+      <label class="profile-field">
+        <span>Cinsiyet</span>
+        <select id="profile-gender-select">
+          <option value="">Seciniz</option>
+          <option value="female">Kadin</option>
+          <option value="male">Erkek</option>
+          <option value="non_binary">Non-binary</option>
+          <option value="other">Diger</option>
+          <option value="prefer_not">Belirtmek istemiyorum</option>
+        </select>
+      </label>
+      <label class="profile-field">
+        <span>Konum</span>
+        <input id="profile-location-input" maxlength="80" placeholder="Sehir, Ulke" list="profile-location-suggestions" />
+        <datalist id="profile-location-suggestions"></datalist>
+      </label>
+      <div class="profile-location-row">
+        <button id="profile-detect-location-btn" type="button">Konumu Otomatik Al</button>
+        <span id="profile-location-status"></span>
+      </div>
+
+      <div class="profile-avatar-wrap">
+        <div class="profile-avatar-preview-wrap">
+          <img id="profile-avatar-preview" src="" alt="Avatar" />
+        </div>
+        <div class="profile-avatar-actions">
+          <button id="profile-avatar-google-btn" type="button" class="profile-upload-btn">Google Avatar</button>
+          <div class="profile-avatar-presets" id="profile-avatar-presets">
+            <button type="button" class="profile-avatar-preset" data-avatar="🐱">🐱</button>
+            <button type="button" class="profile-avatar-preset" data-avatar="🦊">🦊</button>
+            <button type="button" class="profile-avatar-preset" data-avatar="🐼">🐼</button>
+            <button type="button" class="profile-avatar-preset" data-avatar="🦁">🦁</button>
+            <button type="button" class="profile-avatar-preset" data-avatar="🐸">🐸</button>
+            <button type="button" class="profile-avatar-preset" data-avatar="🐧">🐧</button>
+          </div>
+          <div id="profile-avatar-history" class="profile-avatar-history"></div>
+          <label class="profile-upload-btn" for="profile-avatar-upload-input">Fotograf Yukle</label>
+          <input id="profile-avatar-upload-input" type="file" accept="image/*" class="hidden" />
+        </div>
+      </div>
+
+      <div id="profile-setup-error" class="profile-setup-error hidden"></div>
+      <button id="profile-setup-save-btn" type="button">Profili Kaydet</button>
+    </div>
+  </div>
+
   <!-- Skin Reveal Overlay -->
   <div id="skin-reveal-overlay" class="hidden">
     <div id="skin-reveal-box">
@@ -430,6 +586,14 @@
   <!-- Power-up targeting hint -->
   <div id="powerup-hint" class="hidden">Tap a cell on the grid</div>
 
+  <div id="ftue-overlay" class="hidden">
+    <div id="ftue-card">
+      <div id="ftue-title">Weaver'a Hoş Geldin</div>
+      <div id="ftue-text">Amaç basit: blokları yerleştir, çizgi ve renk patlatmalarıyla puan topla.</div>
+      <button id="ftue-next-btn">Devam</button>
+    </div>
+  </div>
+
   <div id="gameover-overlay" class="hidden">
     <div id="gameover-box">
       <h2>GAME OVER</h2>
@@ -438,6 +602,7 @@
         <div class="go-stat"><span class="go-label">COINS EARNED</span><strong id="final-coins">+0 🪙</strong></div>
       </div>
       <button id="restart-btn">Play Again</button>
+      <button id="gameover-menu-btn">Ana Menü</button>
     </div>
   </div>
 

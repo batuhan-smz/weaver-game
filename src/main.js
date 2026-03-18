@@ -17,6 +17,7 @@ import {
   setSfxVolume, getSfxVolume,
   setMusicVolume, getMusicVolume,
   prepareBackgroundMusic, resumeAudio,
+  setSkipFileSfx,
 } from './sounds.js';
 import {
   googleSignIn, googleSignOut, onAuthChange,
@@ -25,8 +26,28 @@ import {
 import {
   createMatch, joinMatchByCode, quickMatch,
   updatePlayerState, finishMatch, cancelMatch, subscribeMatch,
+  clearVoiceSignal, publishVoiceOffer, publishVoiceAnswer,
+  setVoiceMicState, subscribeVoiceSignal, sendVoiceCandidate, subscribeVoiceCandidates,
   serializeBoard, drawMiniBoard, nextVsBlock, SeededRng,
 } from './vs.js';
+import {
+  upsertUserProfile,
+  updateUserProfile,
+  sendFriendRequest,
+  sendFriendRequestByEmail,
+  respondFriendRequest,
+  sendFriendChatMessage,
+  subscribeFriendChat,
+  sendVsInvite,
+  sendMatchChatMessage,
+  subscribeFriendRequests,
+  subscribeIncomingVsInvites,
+  subscribeMatchChat,
+  submitPlayerReport,
+  respondVsInvite,
+  setPresence,
+  subscribeFriends,
+} from './social.js';
 import { t, setLang, getLang, AVAILABLE_LANGS } from './i18n.js';
 import { initAds, showRewardedAd } from './ads.js';
 
@@ -34,11 +55,28 @@ const TRAY_SIZE      = 4;
 const HARD_EVERY     = 5;
 const SCORE_PER_COIN = 1000;
 const TUTORIAL_KEY   = 'weaverTutorialDone';
-const TUTORIAL_TOTAL_STEPS = 4;
+const TUTORIAL_TOTAL_STEPS = 6;
+const FTUE_KEY = 'weaverFtueDone';
+const CHALLENGE_LOCAL_KEY = 'weaverChallengeLocal';
+const CHALLENGE_GLOBAL_KEY = 'weaverChallengeGlobal';
+const CHALLENGE_SEED_KEY = 'weaverChallengeSeed';
+const CHALLENGE_ROWS = 6;
 const CLEAN_BONUS_POINTS = 500;
 const VS_STATE_SYNC_MS = 300;
 const VS_MOVE_TIMEOUT_MS = 20_000;
+const VS_START_GRACE_MS = 4_000;
+const VS_RTC_CONFIG = {
+  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+};
+const PRESENCE_STALE_MS = 25_000;
+const FRIENDS_UI_REFRESH_MS = 10_000;
 const GUEST_SNAPSHOT_KEY = 'weaverGuestSnapshot';
+const MIC_PERMISSION_PROMPT_KEY = 'weaverMicPermissionPrompted';
+const LOCATION_PERMISSION_PROMPT_KEY = 'weaverLocationPermissionPrompted';
+const PROFILE_SETUP_DONE_PREFIX = 'weaverProfileSetupDone';
+const AVATAR_CACHE_PREFIX = 'weaverAvatarCache';
+const AVATAR_HISTORY_PREFIX = 'weaverAvatarHistory';
+const MODERATION_BLOCK_PREFIX = 'weaverBlocked';
 const RANK_KEY_PREFIX = 'weaverRankPoints';
 const RANK_TIERS = [
   { key: 'bronze',  label: 'BRONZ', threshold: 0,    gapToWin: 1000 },
@@ -99,17 +137,149 @@ function _setVisible(el, visible) {
   el?.classList.toggle('hidden', !visible);
 }
 
+function _profileSetupDoneKey(uid) {
+  return `${PROFILE_SETUP_DONE_PREFIX}_${uid}`;
+}
+
+function _avatarCacheKey(uid) {
+  return `${AVATAR_CACHE_PREFIX}_${uid}`;
+}
+
+function _avatarHistoryKey(uid) {
+  return `${AVATAR_HISTORY_PREFIX}_${uid}`;
+}
+
+function _blockKey(uid) {
+  return `${MODERATION_BLOCK_PREFIX}_${uid}`;
+}
+
+function _readLocalAvatar(uid) {
+  if (!uid) return null;
+  try {
+    const raw = localStorage.getItem(_avatarCacheKey(uid));
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function _writeLocalAvatar(uid, payload) {
+  if (!uid || !payload) return;
+  localStorage.setItem(_avatarCacheKey(uid), JSON.stringify(payload));
+}
+
+function _readAvatarHistory(uid) {
+  if (!uid) return [];
+  try {
+    const raw = JSON.parse(localStorage.getItem(_avatarHistoryKey(uid)) || '[]');
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+
+function _pushAvatarHistory(uid, value) {
+  if (!uid || !value) return;
+  const list = _readAvatarHistory(uid).filter(v => v !== value);
+  list.unshift(value);
+  localStorage.setItem(_avatarHistoryKey(uid), JSON.stringify(list.slice(0, 12)));
+}
+
+function _isProfileComplete(data = {}) {
+  return !!(data.profileCompleted && data.birthDate && data.gender);
+}
+
+async function _reverseGeocode(lat, lng) {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}`;
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    const json = await res.json();
+    const addr = json?.address || {};
+    const city = addr.city || addr.town || addr.village || addr.state || '';
+    const country = addr.country || '';
+    const text = [city, country].filter(Boolean).join(', ');
+    return text || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  } catch {
+    return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  }
+}
+
+async function _runAvatarModeration({ fileName = '', dataUrl = '' } = {}) {
+  const name = String(fileName || '').toLowerCase();
+  const blockedWords = ['porn', 'nude', 'nudity', 'xxx', 'sex', 'gore', 'violent'];
+  if (blockedWords.some(w => name.includes(w))) {
+    return { safe: false, reason: 'unsafe_filename' };
+  }
+
+  const endpoint = window?.WEAVER_MODERATION_ENDPOINT;
+  if (!endpoint) return { safe: true };
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: dataUrl }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (json?.safe === false) return { safe: false, reason: json?.reason || 'unsafe_content' };
+    return { safe: true };
+  } catch {
+    return { safe: true };
+  }
+}
+
+function _setProfileError(msg = '') {
+  const el = _el('profile-setup-error');
+  if (!el) return;
+  if (!msg) {
+    el.textContent = '';
+    el.classList.add('hidden');
+    return;
+  }
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+async function _requestMicPermissionOnFirstLaunch() {
+  if (localStorage.getItem(MIC_PERMISSION_PROMPT_KEY) === '1') return;
+  localStorage.setItem(MIC_PERMISSION_PROMPT_KEY, '1');
+  if (!navigator?.mediaDevices?.getUserMedia) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach(track => {
+      track.enabled = false;
+      track.stop();
+    });
+  } catch {
+    // Permission denied or unavailable; keep app flow uninterrupted.
+  }
+}
+
+async function _requestLocationPermissionOnFirstLaunch() {
+  if (localStorage.getItem(LOCATION_PERMISSION_PROMPT_KEY) === '1') return;
+  localStorage.setItem(LOCATION_PERMISSION_PROMPT_KEY, '1');
+  if (!navigator?.geolocation) return;
+  navigator.geolocation.getCurrentPosition(() => {}, () => {}, {
+    enableHighAccuracy: false,
+    timeout: 7_000,
+    maximumAge: 0,
+  });
+}
+
 function _rankStorageKey(uid) {
-  return uid ? `${RANK_KEY_PREFIX}_${uid}` : RANK_KEY_PREFIX;
+  return uid ? `${RANK_KEY_PREFIX}_${uid}` : null;
 }
 
 function _getRankPoints(uid = _currentUser?.uid) {
-  return Number(localStorage.getItem(_rankStorageKey(uid)) ?? 0);
+  const key = _rankStorageKey(uid);
+  if (!key) return 0;
+  return Number(localStorage.getItem(key) ?? 0);
 }
 
 function _setRankPoints(points, uid = _currentUser?.uid) {
+  const key = _rankStorageKey(uid);
+  if (!key) return 0;
   const safe = Math.max(0, Math.round(points));
-  localStorage.setItem(_rankStorageKey(uid), String(safe));
+  localStorage.setItem(key, String(safe));
   return safe;
 }
 
@@ -145,6 +315,11 @@ function _formatRankText(points) {
 }
 
 function _updateRankBadges(uid = _currentUser?.uid) {
+  const signedIn = !!uid;
+  ['ss-rank-badge', 'ss-rank-summary', 'play-rank-pill', 'settings-rank-badge']
+    .forEach(id => _setVisible(_el(id), signedIn));
+  if (!signedIn) return;
+
   const points = _getRankPoints(uid);
   const text = _formatRankText(points);
   ['ss-rank-badge', 'ss-rank-summary', 'play-rank-pill', 'settings-rank-badge']
@@ -160,7 +335,6 @@ function _captureGuestSnapshot() {
     unlockedIds: [...economy.unlockedIds],
     activeSkinId: economy.activeSkinId,
     bestScore: Number(localStorage.getItem('weaverBest') ?? 0),
-    rankPoints: _getRankPoints(),
   };
   localStorage.setItem(GUEST_SNAPSHOT_KEY, JSON.stringify(snapshot));
 }
@@ -179,7 +353,6 @@ function _restoreGuestSnapshot() {
   economy._save();
 
   localStorage.setItem('weaverBest', String(Number(snapshot.bestScore ?? 0)));
-  _setRankPoints(Number(snapshot.rankPoints ?? 0));
   localStorage.removeItem(GUEST_SNAPSHOT_KEY);
 
   updateCoinDisplays();
@@ -191,12 +364,320 @@ function _restoreGuestSnapshot() {
   }
 }
 
+function _challengeDisplayName() {
+  return _currentUser?.displayName || 'Guest';
+}
+
+function _loadBoard(key) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function _saveBoard(key, rows) {
+  localStorage.setItem(key, JSON.stringify(rows.slice(0, CHALLENGE_ROWS)));
+}
+
+function _seedGlobalBoardIfNeeded() {
+  const exists = _loadBoard(CHALLENGE_GLOBAL_KEY);
+  if (exists.length) return;
+  const bots = [
+    { name: 'PixelFox', level: 8, score: 19420 },
+    { name: 'GridMind', level: 7, score: 16650 },
+    { name: 'LineStorm', level: 6, score: 13910 },
+    { name: 'NeoBlock', level: 5, score: 11800 },
+  ];
+  _saveBoard(CHALLENGE_GLOBAL_KEY, bots);
+}
+
+function _submitChallengeScore({ level, score }) {
+  const entry = {
+    name: _challengeDisplayName(),
+    level: Number(level || 1),
+    score: Number(score || 0),
+  };
+
+  const rankSort = (a, b) => (b.level - a.level) || (b.score - a.score);
+
+  const local = _loadBoard(CHALLENGE_LOCAL_KEY);
+  local.push(entry);
+  local.sort(rankSort);
+  _saveBoard(CHALLENGE_LOCAL_KEY, local);
+
+  _seedGlobalBoardIfNeeded();
+  const global = _loadBoard(CHALLENGE_GLOBAL_KEY);
+  global.push(entry);
+  global.sort(rankSort);
+  _saveBoard(CHALLENGE_GLOBAL_KEY, global);
+}
+
+function _renderChallengeBoardList(targetId, rows) {
+  const root = _el(targetId);
+  if (!root) return;
+  root.innerHTML = '';
+  if (!rows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'challenge-board-empty';
+    empty.textContent = 'Henüz kayıt yok';
+    root.appendChild(empty);
+    return;
+  }
+  rows.slice(0, CHALLENGE_ROWS).forEach((r, idx) => {
+    const row = document.createElement('div');
+    row.className = 'challenge-board-row';
+    row.innerHTML = `<span>${idx + 1}. ${r.name}</span><span>L${r.level} • ${Number(r.score).toLocaleString()}</span>`;
+    root.appendChild(row);
+  });
+}
+
+function renderChallengeLeaderboards() {
+  _seedGlobalBoardIfNeeded();
+  _renderChallengeBoardList('challenge-local-board', _loadBoard(CHALLENGE_LOCAL_KEY));
+  _renderChallengeBoardList('challenge-global-board', _loadBoard(CHALLENGE_GLOBAL_KEY));
+}
+
+function _presenceStatusToUi(row) {
+  const lastSeenAt = Number(row?.lastSeenAt || 0);
+  const isFresh = lastSeenAt > 0 && (Date.now() - lastSeenAt) <= PRESENCE_STALE_MS;
+  if (!isFresh) return { key: 'offline', label: t('statusOffline'), cls: 'friend-status' };
+
+  const state = row?.presenceState;
+  if (state === 'in_game') return { key: 'in_game', label: t('statusInGame'), cls: 'friend-status friend-status--ingame' };
+  if (state === 'online') return { key: 'online', label: t('statusOnline'), cls: 'friend-status friend-status--online' };
+  return { key: 'offline', label: t('statusOffline'), cls: 'friend-status' };
+}
+
+function _renderFriendsPanel() {
+  if (!friendsListEl) return;
+  _renderFriendRequestsPanel();
+  friendsListEl.innerHTML = '';
+
+  if (!_friendsRows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'friend-empty';
+    empty.textContent = t('friendsEmpty');
+    friendsListEl.appendChild(empty);
+    return;
+  }
+
+  _friendsRows.forEach(row => {
+    const status = _presenceStatusToUi(row);
+    const item = document.createElement('div');
+    item.className = 'friend-row';
+
+    const main = document.createElement('div');
+    main.className = 'friend-main';
+
+    let avatarEl;
+    if (row.photoURL) {
+      avatarEl = document.createElement('img');
+      avatarEl.className = 'friend-avatar';
+      avatarEl.src = row.photoURL;
+      avatarEl.alt = row.name || 'Player';
+      avatarEl.referrerPolicy = 'no-referrer';
+    } else {
+      avatarEl = document.createElement('span');
+      avatarEl.className = 'friend-avatar friend-avatar--fallback';
+      avatarEl.textContent = (row.name || 'P').slice(0, 1).toUpperCase();
+    }
+
+    const name = document.createElement('span');
+    name.className = 'friend-name';
+    name.textContent = row.name || 'Player';
+    main.append(avatarEl, name);
+
+    const chip = document.createElement('span');
+    chip.className = status.cls;
+    chip.textContent = status.label;
+
+    const controls = document.createElement('div');
+    controls.className = 'friend-row-controls';
+    controls.appendChild(chip);
+
+    if (status.key === 'online') {
+      const inviteBtn = document.createElement('button');
+      inviteBtn.type = 'button';
+      inviteBtn.className = 'friend-invite-btn';
+      inviteBtn.textContent = 'VS Davet';
+      inviteBtn.onclick = () => vsSession.inviteFriend(row);
+      controls.appendChild(inviteBtn);
+    }
+
+    const chatBtn = document.createElement('button');
+    chatBtn.type = 'button';
+    chatBtn.className = 'friend-chat-btn';
+    chatBtn.textContent = 'Sohbet';
+    chatBtn.onclick = () => _openFriendChat(row);
+    controls.appendChild(chatBtn);
+
+    item.append(main, controls);
+    friendsListEl.appendChild(item);
+  });
+}
+
+function _renderFriendChatRows(rows = []) {
+  if (!friendsChatMessagesEl) return;
+  const me = _currentUser?.uid;
+  friendsChatMessagesEl.innerHTML = '';
+  rows.forEach(row => {
+    const line = document.createElement('div');
+    line.className = `friends-chat-row${row.uid === me ? ' friends-chat-row--me' : ''}`;
+    line.textContent = row.text || '';
+    friendsChatMessagesEl.appendChild(line);
+  });
+  friendsChatMessagesEl.scrollTop = friendsChatMessagesEl.scrollHeight;
+}
+
+function _closeFriendChat() {
+  if (_unsubFriendChat) {
+    _unsubFriendChat();
+    _unsubFriendChat = null;
+  }
+  _activeFriendChat = null;
+  if (friendsChatInputEl) friendsChatInputEl.value = '';
+  _renderFriendChatRows([]);
+  _setVisible(friendsChatPanelEl, false);
+}
+
+function _openFriendChat(row) {
+  if (!_currentUser?.uid || !row?.uid) return;
+  _activeFriendChat = row;
+  if (friendsChatTitleEl) friendsChatTitleEl.textContent = row.name || 'Sohbet';
+  _setVisible(friendsChatPanelEl, true);
+
+  if (_unsubFriendChat) {
+    _unsubFriendChat();
+    _unsubFriendChat = null;
+  }
+  _unsubFriendChat = subscribeFriendChat(_currentUser.uid, row.uid, rows => _renderFriendChatRows(rows));
+}
+
+function _renderVsInviteNotice() {
+  if (!vsInviteNoticeEl || !_incomingVsInvites.length) {
+    _setVisible(vsInviteNoticeEl, false);
+    return;
+  }
+  const invite = _incomingVsInvites[0];
+  if (vsInviteTextEl) {
+    vsInviteTextEl.textContent = `${invite.senderName || 'Arkadasin'} seni VS maca davet etti.`;
+  }
+  vsInviteNoticeEl.dataset.inviteId = invite.id;
+  _setVisible(vsInviteNoticeEl, true);
+}
+
+function _renderFriendRequestsPanel() {
+  if (!friendsRequestsEl) return;
+  friendsRequestsEl.innerHTML = '';
+
+  if (!_friendRequestRows.length) {
+    friendsRequestsEl.classList.add('hidden');
+    return;
+  }
+
+  friendsRequestsEl.classList.remove('hidden');
+
+  const title = document.createElement('div');
+  title.className = 'friends-requests-title';
+  title.textContent = 'Arkadaslik Istekleri';
+  friendsRequestsEl.appendChild(title);
+
+  _friendRequestRows.forEach(row => {
+    const item = document.createElement('div');
+    item.className = 'friend-request-row';
+
+    const name = document.createElement('span');
+    name.className = 'friend-name';
+    name.textContent = row.requesterName || 'Player';
+
+    const actions = document.createElement('div');
+    actions.className = 'friend-request-actions';
+
+    const acceptBtn = document.createElement('button');
+    acceptBtn.type = 'button';
+    acceptBtn.className = 'friend-request-btn friend-request-btn--accept';
+    acceptBtn.textContent = 'Kabul';
+    acceptBtn.onclick = async () => {
+      try {
+        await respondFriendRequest(_currentUser, row.id, 'accept', { matchId: row.requestMatchId });
+        showToast('Arkadaslik istegi kabul edildi.');
+      } catch (err) {
+        showToast(String(err?.message || err));
+      }
+    };
+
+    const rejectBtn = document.createElement('button');
+    rejectBtn.type = 'button';
+    rejectBtn.className = 'friend-request-btn friend-request-btn--reject';
+    rejectBtn.textContent = 'Reddet';
+    rejectBtn.onclick = async () => {
+      try {
+        await respondFriendRequest(_currentUser, row.id, 'reject', { matchId: row.requestMatchId });
+        showToast('Istek reddedildi. Bu eslesmede tekrar gonderilemez.');
+      } catch (err) {
+        showToast(String(err?.message || err));
+      }
+    };
+
+    actions.append(acceptBtn, rejectBtn);
+    item.append(name, actions);
+    friendsRequestsEl.appendChild(item);
+  });
+}
+
+function _presenceStateForCurrentGame() {
+  return game?._vsMode ? 'in_game' : 'online';
+}
+
+function _updateMyPresence() {
+  if (!_currentUser || !navigator.onLine) return;
+  setPresence(_currentUser, _presenceStateForCurrentGame()).catch(() => {});
+}
+
+function _startPresenceHeartbeat() {
+  if (_presenceHeartbeat) clearInterval(_presenceHeartbeat);
+  _presenceHeartbeat = setInterval(_updateMyPresence, 10_000);
+}
+
+function _startFriendsUiRefresh() {
+  if (_friendsUiRefreshTimer) clearInterval(_friendsUiRefreshTimer);
+  _friendsUiRefreshTimer = setInterval(() => {
+    if (_friendsRows.length) _renderFriendsPanel();
+  }, FRIENDS_UI_REFRESH_MS);
+}
+
+function _stopPresenceHeartbeat() {
+  if (_presenceHeartbeat) clearInterval(_presenceHeartbeat);
+  _presenceHeartbeat = null;
+}
+
+function _stopFriendsUiRefresh() {
+  if (_friendsUiRefreshTimer) clearInterval(_friendsUiRefreshTimer);
+  _friendsUiRefreshTimer = null;
+}
+
 // ── Global state ────────────────────────────────────────────────────────────
 
 const economy = new EconomyStore();
 const market  = new MarketStore();
 let game      = null;
 let _currentUser = null;
+let _unsubFriends = null;
+let _unsubFriendRequests = null;
+let _unsubVsInvites = null;
+let _presenceHeartbeat = null;
+let _friendsUiRefreshTimer = null;
+let _unsubFriendChat = null;
+let _friendsRows = [];
+let _friendRequestRows = [];
+let _incomingVsInvites = [];
+let _activeFriendChat = null;
+let _profileDocCache = null;
+let _profileAvatarDraft = null;
+let _profileLocationGeo = null;
+let _locationSuggestTimer = null;
 
 // ── Animation preference ──────────────────────────────────────────────────────
 const ANIM_KEY       = 'weaverAnimations';
@@ -208,20 +689,24 @@ const _getHandMode = () => _normalizeHandMode(localStorage.getItem(HAND_KEY));
 const _setHandMode = v => localStorage.setItem(HAND_KEY, _normalizeHandMode(v));
 const FONT_KEY = 'weaverUIFont';
 const FONT_CHOICES = {
-  // Keep options clearly distinct even when Nunito webfont is unavailable.
-  avenir: "'Trebuchet MS', 'Segoe UI', system-ui, sans-serif",
-  nunito: "'Nunito', Georgia, 'Times New Roman', serif",
-  verdana: "'Roboto Mono', 'Courier New', 'Lucida Console', monospace",
+  // Use highly distinct families so the user can clearly see switching on Android/WebView.
+  avenir: "Georgia, 'Times New Roman', serif",
+  nunito: "'Nunito', 'Trebuchet MS', 'Segoe UI', system-ui, sans-serif",
+  verdana: "Verdana, Geneva, 'Courier New', 'Roboto Mono', monospace",
 };
 
 function _getUiFontChoice() {
-  const stored = localStorage.getItem(FONT_KEY) || 'nunito';
-  return FONT_CHOICES[stored] ? stored : 'nunito';
+  const stored = localStorage.getItem(FONT_KEY) || 'verdana';
+  return FONT_CHOICES[stored] ? stored : 'verdana';
 }
 
 function _applyUiFont(choice = _getUiFontChoice()) {
-  const safe = FONT_CHOICES[choice] ? choice : 'nunito';
-  document.documentElement.style.setProperty('--ui-font', FONT_CHOICES[safe]);
+  const safe = FONT_CHOICES[choice] ? choice : 'verdana';
+  const stack = FONT_CHOICES[safe];
+  document.documentElement.style.setProperty('--ui-font', stack);
+  document.documentElement.style.fontFamily = stack;
+  if (document.body) document.body.style.fontFamily = stack;
+  document.documentElement.setAttribute('data-ui-font', safe);
   localStorage.setItem(FONT_KEY, safe);
 }
 
@@ -241,12 +726,36 @@ const marketGrid   = _el('market-grid');
 const powerupHint  = _el('powerup-hint');
 const tutorialOverlay = _el('tutorial-overlay');
 const tutorialStepEl  = _el('tutorial-step');
-const tutorialTextEl  = _el('tutorial-text');
+const tutorialProgressEl = _el('tutorial-progress');
+const tutorialStepAnimEl = _el('tutorial-step-anim');
 const rotateControls  = _el('rotate-controls');
 const rotateLeftBtn   = _el('rotate-left-btn');
 const rotateRightBtn  = _el('rotate-right-btn');
 const rotateConfirmBtn= _el('rotate-confirm-btn');
 const rotateLabelEl   = _el('rotate-controls-label');
+const tutorialSkipBtn = _el('tutorial-skip-btn');
+const bootLoaderEl    = _el('boot-loader');
+const friendsBtn      = _el('ss-friends-btn');
+const friendsPanel    = _el('friends-panel');
+const friendsRequestsEl = _el('friends-requests');
+const friendsListEl   = _el('friends-list');
+const friendsChatPanelEl = _el('friends-chat-panel');
+const friendsChatTitleEl = _el('friends-chat-title');
+const friendsChatMessagesEl = _el('friends-chat-messages');
+const friendsChatInputEl = _el('friends-chat-input');
+const vsInviteNoticeEl = _el('vs-invite-notice');
+const vsInviteTextEl = _el('vs-invite-text');
+const profileSetupOverlayEl = _el('profile-setup-overlay');
+const profileDisplayNameInputEl = _el('profile-display-name-input');
+const profileBirthDateInputEl = _el('profile-birthdate-input');
+const profileGenderSelectEl = _el('profile-gender-select');
+const profileLocationInputEl = _el('profile-location-input');
+const profileLocationSuggestionsEl = _el('profile-location-suggestions');
+const profileLocationStatusEl = _el('profile-location-status');
+const profileAvatarPreviewEl = _el('profile-avatar-preview');
+const profileAvatarUploadInputEl = _el('profile-avatar-upload-input');
+const profileAvatarGoogleBtnEl = _el('profile-avatar-google-btn');
+const profileAvatarHistoryEl = _el('profile-avatar-history');
 
 // Reveal overlay elements
 const _revealOverlay = _el('skin-reveal-overlay');
@@ -291,6 +800,13 @@ function applyTranslations() {
   set('settings-version', 'version');
   set('buy-random-btn', 'buyRandomSkin');
   set('ss-buy-coins-note', 'buyCoinsHint');
+  set('vs-add-friend-label', 'socialAddFriend');
+  set('vs-voice-label', 'socialVoiceChat');
+  set('vs-report-label', 'socialReport');
+  set('vs-chat-send-btn', 'socialSend');
+  set('friends-panel-title', 'friendsTitle');
+  const chatInput = _el('vs-chat-input');
+  if (chatInput) chatInput.placeholder = t('socialChatPlaceholder');
   const settingsSignOut = _el('settings-signout-btn');
   if (settingsSignOut) settingsSignOut.textContent = `✕ ${t('signOut')}`;
   const bestLabel = document.querySelector('#start-stats .ss-box:first-child .ss-label');
@@ -318,6 +834,7 @@ function applyTranslations() {
     const key = el.dataset.i18n;
     if (key) el.textContent = t(key);
   });
+  _renderFriendsPanel();
 }
 applyTranslations();
 initAds(); // Reklam sistemini başlat — native cihazda ilk reklamı arka planda yükler
@@ -333,11 +850,81 @@ _updateStartScreen();
 _applyUiFont();
 prepareBackgroundMusic().catch(() => {});
 
+const _ftueSlides = [
+  'Weaver\'a hoş geldin. Amaç: blokları yerleştir, çizgi ve renk patlamalarıyla puan topla.',
+  'Meydan Okuma modunda hedefin ekranı tamamen temizlemek. Her seviye yeni bir bulmaca getirir.',
+  'Market\'teki Undo gücü son hamleni geri alır. Zor anlarda kurtarıcıdır.',
+];
+let _ftueIdx = 0;
+function _showFtueIfNeeded() {
+  const overlay = _el('ftue-overlay');
+  if (!overlay) return;
+  // Interactive tutorial replaces text-based FTUE on first install.
+  localStorage.setItem(FTUE_KEY, '1');
+  _setVisible(overlay, false);
+}
+_showFtueIfNeeded();
+
+let _bootLoaderGone = false;
+function _hideBootLoader() {
+  if (_bootLoaderGone) return;
+  _bootLoaderGone = true;
+  if (!bootLoaderEl) return;
+  bootLoaderEl.classList.add('hidden');
+  setTimeout(() => bootLoaderEl.remove(), 360);
+  setTimeout(() => { _requestMicPermissionOnFirstLaunch(); }, 420);
+  setTimeout(() => { _requestLocationPermissionOnFirstLaunch(); }, 520);
+  
+  // Check if tutorial should run on first launch
+  if (localStorage.getItem(TUTORIAL_KEY) !== '1') {
+    _startFirstLaunchTutorial();
+  }
+}
+
+function _startFirstLaunchTutorial() {
+  _requestImmersiveMode();
+  _setVisible(startScreen, false);
+  _setVisible(mainApp, true);
+  if (!game) game = new Game({ mode: 'endless' });
+  else if (game._mode !== 'endless') game.restart({ mode: 'endless' });
+  Object.entries(PAGES).forEach(([key, el]) => el.classList.toggle('hidden', key !== 'play'));
+  _currentPage = 'play';
+  document.querySelectorAll('.nav-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.page === 'play')
+  );
+  _syncNavForPage('play');
+  _syncPlayHudVisibility('endless');
+}
+window.addEventListener('load', () => {
+  setTimeout(_hideBootLoader, 520);
+}, { once: true });
+setTimeout(_hideBootLoader, 2200);
+
 // ── Navigation ───────────────────────────────────────────────────────────────
 
 const PAGES = { play: pagePlay, skins: pageSkins, market: pageMarket, settings: pageSettings };
 const PAGE_ORDER = ['play', 'market', 'skins', 'settings'];
 let _currentPage = 'market';
+let _settingsReturnTarget = 'play';
+
+function _syncNavForPage(pageName = _currentPage) {
+  const nav = _el('bottom-nav');
+  const hideForVs = !!game?._vsMode;
+  if (nav) nav.classList.toggle('hidden', pageName === 'settings' || hideForVs);
+}
+
+function _syncPlayHudVisibility(mode = game?._mode) {
+  const isVs = mode === 'vs';
+  _setVisible(_el('coin-hud'), !isVs);
+  _setVisible(_el('play-rank-pill'), !isVs);
+  _setVisible(_el('vs-menu-toggle-btn'), isVs);
+  document.body.classList.toggle('vs-active', isVs);
+  if (!isVs) {
+    _setVisible(_el('vs-chat-panel'), false);
+    _setVisible(_el('vs-menu-panel'), false);
+  }
+  _updateMyPresence();
+}
 
 function showPage(name) {
   if (name === _currentPage) {
@@ -354,6 +941,8 @@ function showPage(name) {
     document.querySelectorAll('.nav-btn').forEach(b =>
       b.classList.toggle('active', b.dataset.page === name)
     );
+    _syncNavForPage(name);
+    if (name === 'play') _syncPlayHudVisibility();
     return;
   }
 
@@ -402,13 +991,18 @@ function showPage(name) {
     b.classList.toggle('active', b.dataset.page === name)
   );
   _currentPage = name;
+  _syncNavForPage(name);
+  if (name === 'play') _syncPlayHudVisibility();
 }
 
 document.querySelectorAll('.nav-btn[data-page]').forEach(btn => {
   btn.addEventListener('click', () => {
+    if (btn.dataset.page === 'settings') {
+      _settingsReturnTarget = _currentPage === 'settings' ? 'play' : _currentPage;
+    }
     if (btn.dataset.page === 'play') {
       if (!game) game = new Game({ mode: 'endless' });
-      else if (game._mode !== 'endless') game.restart({ mode: 'endless' });
+      _syncPlayHudVisibility(game?._mode || 'endless');
     }
     if (btn.dataset.page === 'play') _requestImmersiveMode();
     showPage(btn.dataset.page);
@@ -423,15 +1017,96 @@ _el('nav-menu-btn').addEventListener('click', () => {
   _updateStartScreen();
 });
 
+friendsBtn?.addEventListener('click', () => {
+  if (!navigator.onLine) { showToast(t('noInternet')); return; }
+  if (!_currentUser) { showToast(t('signInRequired')); return; }
+  if (friendsPanel?.classList.contains('hidden')) _closeFriendChat();
+  _renderFriendsPanel();
+  friendsPanel?.classList.toggle('hidden');
+});
+
+_el('friends-panel-close-btn')?.addEventListener('click', () => {
+  _closeFriendChat();
+  _setVisible(friendsPanel, false);
+});
+
+_el('friends-chat-back-btn')?.addEventListener('click', () => {
+  _closeFriendChat();
+});
+
+const _sendFriendChat = async () => {
+  if (!_currentUser || !_activeFriendChat?.uid) return;
+  const text = String(friendsChatInputEl?.value || '').trim();
+  if (!text) return;
+  if (friendsChatInputEl) friendsChatInputEl.value = '';
+  try {
+    await sendFriendChatMessage(_activeFriendChat.uid, _currentUser, text);
+  } catch (err) {
+    showToast(String(err?.message || err));
+  }
+};
+
+_el('friends-chat-send-btn')?.addEventListener('click', _sendFriendChat);
+friendsChatInputEl?.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  _sendFriendChat();
+});
+
+window.addEventListener('online', () => {
+  _updateModeSelectUI();
+  if (_currentUser) {
+    _updateMyPresence();
+    _startPresenceHeartbeat();
+    _startFriendsUiRefresh();
+    if (_unsubFriends) _unsubFriends();
+    if (_unsubFriendRequests) _unsubFriendRequests();
+    if (_unsubVsInvites) _unsubVsInvites();
+    _unsubFriends = subscribeFriends(_currentUser, rows => {
+      _friendsRows = rows;
+      _renderFriendsPanel();
+    });
+    _unsubFriendRequests = subscribeFriendRequests(_currentUser, rows => {
+      _friendRequestRows = rows;
+      _renderFriendsPanel();
+      vsSession.onFriendRequestsChanged();
+    });
+    _unsubVsInvites = subscribeIncomingVsInvites(_currentUser, rows => {
+      _incomingVsInvites = rows;
+      _renderVsInviteNotice();
+    });
+  }
+});
+
+window.addEventListener('offline', () => {
+  _updateModeSelectUI();
+  _stopPresenceHeartbeat();
+  _stopFriendsUiRefresh();
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (!_currentUser) return;
+  if (document.hidden) {
+    setPresence(_currentUser, 'offline').catch(() => {});
+    return;
+  }
+  _updateMyPresence();
+});
+
 // ── Start button → show mode selection sheet ────────────────────────────────
 
 function _updateModeSelectUI() {
   const vsBtn = _el('mode-vs-btn');
   const vsTag = _el('mode-vs-tag');
   if (!vsBtn || !vsTag) return;
+  renderChallengeLeaderboards();
   const signedIn = !!_currentUser;
-  vsBtn.disabled = !signedIn;
-  if (signedIn) {
+  const online = navigator.onLine;
+  vsBtn.disabled = !signedIn || !online;
+  if (!online) {
+    vsTag.textContent = 'OFFLINE';
+    vsTag.className = 'mode-card-tag mode-card-tag--locked';
+  } else if (signedIn) {
     vsTag.textContent = 'ONLINE';
     vsTag.className = 'mode-card-tag';
   } else {
@@ -463,10 +1138,30 @@ _el('mode-endless-btn').addEventListener('click', () => {
   document.querySelectorAll('.nav-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.page === 'play')
   );
+  _syncPlayHudVisibility('endless');
+  _syncNavForPage('play');
+});
+
+_el('mode-challenge-btn')?.addEventListener('click', () => {
+  _el('mode-select-overlay').classList.add('hidden');
+  _requestImmersiveMode();
+  _setVisible(startScreen, false);
+  _setVisible(mainApp, true);
+  if (!game) game = new Game({ mode: 'challenge' });
+  else if (game._mode !== 'challenge') game.restart({ mode: 'challenge' });
+  Object.entries(PAGES).forEach(([key, el]) => el.classList.toggle('hidden', key !== 'play'));
+  _currentPage = 'play';
+  document.querySelectorAll('.nav-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.page === 'play')
+  );
+  _syncPlayHudVisibility('challenge');
+  _syncNavForPage('play');
 });
 
 // 1v1 VS mode
 _el('mode-vs-btn').addEventListener('click', () => {
+  if (!navigator.onLine) { showToast(t('noInternet')); return; }
+  if (!_currentUser) { showToast(t('signInRequired')); return; }
   _el('mode-select-overlay').classList.add('hidden');
   vsSession.openLobby();
 });
@@ -494,9 +1189,246 @@ const vsSession = (() => {
   let _myLiveScore = 0;
   let _oppLiveScore = 0;
   let _rankAppliedForMatch = null;
+  let _unsubChat = null;
+  let _voiceStream = null;
+  let _voicePeer = null;
+  let _voiceRemoteAudio = null;
+  let _voicePendingCandidates = [];
+  let _voiceProcessedCandidateIds = new Set();
+  let _lastOfferAt = 0;
+  let _lastAnswerAt = 0;
+  let _unsubVoiceSignal = null;
+  let _unsubVoiceCandidates = null;
+  let _voiceEnabled = false;
+  const _dismissedVsRequestIds = new Set();
 
   const _overlay = () => _el('vs-overlay');
   const _screen  = id => _el(id);
+
+  function _refreshVoiceButtonLabel() {
+    const btn = _el('vs-voice-btn');
+    if (!btn) return;
+    const icon = btn.querySelector('.vs-menu-icon--mic');
+    const label = _el('vs-voice-label');
+    if (label) label.textContent = t('socialVoiceChat');
+    if (!icon) return;
+    icon.classList.toggle('is-muted', !_voiceEnabled);
+  }
+
+  function _getOrCreateRemoteAudio() {
+    if (_voiceRemoteAudio) return _voiceRemoteAudio;
+    const audio = document.createElement('audio');
+    audio.autoplay = true;
+    audio.playsInline = true;
+    audio.style.display = 'none';
+    document.body.appendChild(audio);
+    _voiceRemoteAudio = audio;
+    return audio;
+  }
+
+  async function _ensureVoiceStream() {
+    if (_voiceStream) return _voiceStream;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getAudioTracks().forEach(track => {
+      track.enabled = _voiceEnabled;
+    });
+    _voiceStream = stream;
+    return stream;
+  }
+
+  function _teardownVoicePeer() {
+    if (_unsubVoiceSignal) {
+      _unsubVoiceSignal();
+      _unsubVoiceSignal = null;
+    }
+    if (_unsubVoiceCandidates) {
+      _unsubVoiceCandidates();
+      _unsubVoiceCandidates = null;
+    }
+    if (_voicePeer) {
+      _voicePeer.onicecandidate = null;
+      _voicePeer.ontrack = null;
+      _voicePeer.onconnectionstatechange = null;
+      _voicePeer.close();
+      _voicePeer = null;
+    }
+    _voicePendingCandidates = [];
+    _voiceProcessedCandidateIds = new Set();
+    _lastOfferAt = 0;
+    _lastAnswerAt = 0;
+  }
+
+  async function _flushPendingVoiceCandidates() {
+    if (!_voicePeer?.remoteDescription) return;
+    const pending = [..._voicePendingCandidates];
+    _voicePendingCandidates = [];
+    for (const cand of pending) {
+      try {
+        await _voicePeer.addIceCandidate(new RTCIceCandidate(cand));
+      } catch {}
+    }
+  }
+
+  async function _handleVoiceSignal(signal) {
+    if (!_voicePeer || !_matchId || !_role || !signal) return;
+
+    if (_role === 'guest' && signal.offer && Number(signal.offerAt || 0) > _lastOfferAt) {
+      _lastOfferAt = Number(signal.offerAt || Date.now());
+      await _voicePeer.setRemoteDescription(new RTCSessionDescription(signal.offer));
+      const answer = await _voicePeer.createAnswer();
+      await _voicePeer.setLocalDescription(answer);
+      await publishVoiceAnswer(_matchId, answer);
+      await _flushPendingVoiceCandidates();
+    }
+
+    if (_role === 'host' && signal.answer && Number(signal.answerAt || 0) > _lastAnswerAt) {
+      _lastAnswerAt = Number(signal.answerAt || Date.now());
+      await _voicePeer.setRemoteDescription(new RTCSessionDescription(signal.answer));
+      await _flushPendingVoiceCandidates();
+    }
+  }
+
+  async function _initVoiceTransport() {
+    if (!_matchId || !_role || !navigator?.mediaDevices?.getUserMedia) return;
+
+    _teardownVoicePeer();
+
+    const peer = new RTCPeerConnection(VS_RTC_CONFIG);
+    _voicePeer = peer;
+
+    peer.ontrack = evt => {
+      const [remoteStream] = evt.streams || [];
+      if (!remoteStream) return;
+      const audio = _getOrCreateRemoteAudio();
+      audio.srcObject = remoteStream;
+      audio.play?.().catch(() => {});
+    };
+
+    peer.onicecandidate = evt => {
+      const candidate = evt.candidate?.toJSON?.() || null;
+      if (!candidate || !_matchId || !_role) return;
+      sendVoiceCandidate(_matchId, _role, candidate).catch(() => {});
+    };
+
+    peer.onconnectionstatechange = () => {
+      if (peer.connectionState === 'failed' || peer.connectionState === 'disconnected') {
+        showToast('Sesli sohbet baglantisi koptu.');
+      }
+    };
+
+    try {
+      const localStream = await _ensureVoiceStream();
+      localStream.getAudioTracks().forEach(track => peer.addTrack(track, localStream));
+    } catch {
+      peer.addTransceiver('audio', { direction: 'recvonly' });
+    }
+
+    const remoteRole = _role === 'host' ? 'guest' : 'host';
+    _unsubVoiceSignal = subscribeVoiceSignal(_matchId, signal => {
+      _handleVoiceSignal(signal).catch(() => {});
+    });
+    _unsubVoiceCandidates = subscribeVoiceCandidates(_matchId, remoteRole, rows => {
+      rows.forEach(row => {
+        if (!row?.id || _voiceProcessedCandidateIds.has(row.id)) return;
+        _voiceProcessedCandidateIds.add(row.id);
+        if (_voicePeer?.remoteDescription) {
+          _voicePeer.addIceCandidate(new RTCIceCandidate(row.candidate)).catch(() => {});
+        } else {
+          _voicePendingCandidates.push(row.candidate);
+        }
+      });
+    });
+
+    if (_role === 'host') {
+      await clearVoiceSignal(_matchId).catch(() => {});
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      await publishVoiceOffer(_matchId, offer);
+    }
+  }
+
+  async function _setMicEnabled(enabled) {
+    _voiceEnabled = !!enabled;
+    try {
+      const stream = await _ensureVoiceStream();
+      stream.getAudioTracks().forEach(track => {
+        track.enabled = _voiceEnabled;
+      });
+      if (_matchId && _role) {
+        setVoiceMicState(_matchId, _role, _voiceEnabled).catch(() => {});
+      }
+      _refreshVoiceButtonLabel();
+      showToast(_voiceEnabled ? t('socialMicOn') : t('socialMicOff'));
+    } catch {
+      _voiceEnabled = false;
+      _refreshVoiceButtonLabel();
+      showToast(t('socialMicDenied'));
+    }
+  }
+
+  function _syncVsFriendRequestToast() {
+    const toast = _el('vs-friend-request-toast');
+    if (!toast) return;
+    if (!_matchId || !game?._vsMode) {
+      _setVisible(toast, false);
+      return;
+    }
+
+    const oppUid = _getOpponentUid();
+    if (!oppUid) {
+      _setVisible(toast, false);
+      return;
+    }
+
+    const req = _friendRequestRows.find(r => {
+      if (!r || r.requesterUid !== oppUid) return false;
+      if (_dismissedVsRequestIds.has(r.id)) return false;
+      if (!r.requestMatchId) return true;
+      return String(r.requestMatchId) === String(_matchId);
+    });
+
+    if (!req) {
+      _setVisible(toast, false);
+      return;
+    }
+
+    const nameEl = _el('vs-fr-name');
+    if (nameEl) nameEl.textContent = `${req.requesterName || 'Rakip'} sana istek gonderdi`;
+    toast.dataset.requestId = req.id;
+    _setVisible(toast, true);
+  }
+
+  function _renderChatRows(rows = []) {
+    const root = _el('vs-chat-messages');
+    if (!root) return;
+    const me = _currentUser?.uid;
+    root.innerHTML = '';
+    rows.forEach(row => {
+      const line = document.createElement('div');
+      line.className = `vs-chat-row${row.uid === me ? ' vs-chat-row--me' : ''}`;
+
+      const author = document.createElement('div');
+      author.className = 'vs-chat-author';
+      author.textContent = row.uid === me ? 'SEN' : (row.name || 'Rakip');
+
+      const text = document.createElement('div');
+      text.className = 'vs-chat-text';
+      text.textContent = row.text || '';
+
+      line.append(author, text);
+      root.appendChild(line);
+    });
+    root.scrollTop = root.scrollHeight;
+  }
+
+  function _startChatSubscription() {
+    if (!_matchId) return;
+    if (_unsubChat) {
+      _unsubChat();
+      _unsubChat = null;
+    }
+    _unsubChat = subscribeMatchChat(_matchId, rows => _renderChatRows(rows));
+  }
 
   function _showScreen(id) {
     ['vs-screen-choose','vs-screen-waiting','vs-screen-countdown','vs-screen-result']
@@ -522,11 +1454,86 @@ const vsSession = (() => {
     }
   }
 
+  async function inviteFriend(friendRow) {
+    if (!navigator.onLine) { showToast(t('noInternet')); return; }
+    if (!_currentUser) { showToast(t('signInRequired')); return; }
+    if (!friendRow?.uid) return;
+
+    _overlay().classList.remove('hidden');
+    _showScreen('vs-screen-waiting');
+    _setWaitingScreen('private');
+
+    try {
+      _countdownStarted = false;
+      _gameLaunched = false;
+      if (_unsubMatch) { _unsubMatch(); _unsubMatch = null; }
+
+      const result = await createMatch(_currentUser, {
+        rankPoints: _getRankPoints(_currentUser.uid),
+      });
+      _matchId = result.matchId;
+      _seed = result.seed;
+      _role = 'host';
+
+      _setWaitingScreen('private', result.inviteCode);
+      _unsubMatch = subscribeMatch(_matchId, _onMatchSnapshot);
+
+      await sendVsInvite(_currentUser, {
+        targetUid: friendRow.uid,
+        matchId: _matchId,
+        inviteCode: result.inviteCode,
+      });
+      showToast('VS daveti gonderildi.');
+    } catch (err) {
+      showToast(String(err?.message || err));
+      _showScreen('vs-screen-choose');
+    }
+  }
+
+  async function acceptInviteCode(code) {
+    const inviteCode = String(code || '').trim().toUpperCase();
+    if (inviteCode.length < 6) {
+      showToast('Davet kodu gecersiz.');
+      return;
+    }
+    if (!navigator.onLine) { showToast(t('noInternet')); return; }
+    if (!_currentUser) { showToast(t('signInRequired')); return; }
+
+    _overlay().classList.remove('hidden');
+    _showScreen('vs-screen-countdown');
+    _el('vs-countdown-num').textContent = '...';
+
+    try {
+      _countdownStarted = false;
+      _gameLaunched = false;
+      if (_unsubMatch) { _unsubMatch(); _unsubMatch = null; }
+
+      const result = await joinMatchByCode(inviteCode, _currentUser, _getRankPoints(_currentUser.uid));
+      _matchId = result.matchId;
+      _seed = result.seed;
+      _role = 'guest';
+      _unsubMatch = subscribeMatch(_matchId, _onMatchSnapshot);
+    } catch (err) {
+      showToast('Hata: ' + (err.message || String(err)));
+      _showScreen('vs-screen-choose');
+    }
+  }
+
   function openLobby() {
+    if (!navigator.onLine) { showToast(t('noInternet')); return; }
+    if (!_currentUser) { showToast(t('signInRequired')); return; }
     _showScreen('vs-screen-choose');
     _overlay().classList.remove('hidden');
     _el('vs-code-input').value = '';
     _setWaitingScreen('private');
+    _voiceEnabled = false;
+    if (_voiceStream) {
+      _voiceStream.getAudioTracks().forEach(track => { track.enabled = false; });
+    }
+    _dismissedVsRequestIds.clear();
+    _refreshVoiceButtonLabel();
+    _setVisible(_el('vs-chat-panel'), false);
+    _setVisible(_el('vs-friend-request-toast'), false);
   }
 
   function _closeLobby() {
@@ -535,13 +1542,32 @@ const vsSession = (() => {
   }
 
   function _stopSync() {
+    if (_matchId && _role) {
+      setVoiceMicState(_matchId, _role, false).catch(() => {});
+    }
+    _teardownVoicePeer();
     if (_unsubMatch) { _unsubMatch(); _unsubMatch = null; }
+    if (_unsubChat) { _unsubChat(); _unsubChat = null; }
     clearInterval(_syncInterval); _syncInterval = null;
     _countdownStarted = false;
     _gameLaunched = false;
     _finishRequested = false;
     _myLiveScore = 0;
     _oppLiveScore = 0;
+    _voiceEnabled = false;
+    _dismissedVsRequestIds.clear();
+    if (_voiceStream) {
+      _voiceStream.getTracks().forEach(tr => tr.stop());
+      _voiceStream = null;
+    }
+    if (_voiceRemoteAudio) {
+      _voiceRemoteAudio.srcObject = null;
+    }
+    _refreshVoiceButtonLabel();
+    _setVisible(_el('vs-chat-panel'), false);
+    _setVisible(_el('vs-menu-panel'), false);
+    _setVisible(_el('vs-friend-request-toast'), false);
+    _renderChatRows([]);
   }
 
   function _setDominanceVisible(visible) {
@@ -649,17 +1675,21 @@ const vsSession = (() => {
     panel.addEventListener('pointercancel', endDrag);
   }
 
-  function _isTimedOut(state, now) {
+  function _isTimedOut(state, now, activeAt) {
     if (!state || state.gameOver) return false;
+    if (!activeAt) return false;
+    if ((now - activeAt) < VS_MOVE_TIMEOUT_MS) return false;
     const lastMoveAt = Number(state.lastMoveAt ?? 0);
-    if (!lastMoveAt) return false;
-    return now - lastMoveAt > VS_MOVE_TIMEOUT_MS;
+    const anchor = Math.max(activeAt, lastMoveAt || 0);
+    return now - anchor > VS_MOVE_TIMEOUT_MS;
   }
 
   function _deriveWinner(data) {
     const hostState = data?.hostState;
     const guestState = data?.guestState;
     if (!hostState || !guestState) return null;
+    const activeAt = Number(data?.activeAt ?? 0);
+    if (!activeAt || (Date.now() - activeAt) < VS_START_GRACE_MS) return null;
 
     const hostUid = data?.host?.uid;
     const guestUid = data?.guest?.uid;
@@ -667,8 +1697,8 @@ const vsSession = (() => {
     const guestScore = Number(guestState.score ?? 0);
 
     const now = Date.now();
-    const hostTimedOut = _isTimedOut(hostState, now);
-    const guestTimedOut = _isTimedOut(guestState, now);
+    const hostTimedOut = _isTimedOut(hostState, now, activeAt);
+    const guestTimedOut = _isTimedOut(guestState, now, activeAt);
     if (hostTimedOut && !guestTimedOut) return guestUid;
     if (guestTimedOut && !hostTimedOut) return hostUid;
     if (hostTimedOut && guestTimedOut) return hostScore === guestScore ? 'tie' : (hostScore > guestScore ? hostUid : guestUid);
@@ -777,11 +1807,24 @@ const vsSession = (() => {
     _updateDominanceBar();
 
     showPage('play');
+    _syncVsFriendRequestToast();
+    _startChatSubscription();
+    _initVoiceTransport().catch(() => {});
+    _el('vs-chat-input').value = '';
+    _updateMyPresence();
 
     // Mark match as active so both players know it started
     if (_matchId) {
+      const activeAt = Date.now();
       getFirebaseServices().then(s =>
-        s.updateDoc(s.doc(s.db, 'matches', _matchId), { status: 'active' })
+        s.updateDoc(s.doc(s.db, 'matches', _matchId), {
+          status: 'active',
+          activeAt,
+          'hostState.lastMoveAt': activeAt,
+          'hostState.updatedAt': activeAt,
+          'guestState.lastMoveAt': activeAt,
+          'guestState.updatedAt': activeAt,
+        })
       ).catch(() => {});
     }
 
@@ -792,7 +1835,7 @@ const vsSession = (() => {
     _syncInterval = setInterval(() => {
       if (!game || !_matchId) return;
       if (!game._isGameOver && (Date.now() - _lastLocalMoveAt) > VS_MOVE_TIMEOUT_MS) {
-        game._gameOver();
+        game._gameOver({ reason: 'no_moves' });
         return;
       }
       _syncMyState({ gameOver: game._isGameOver ?? false });
@@ -891,6 +1934,7 @@ const vsSession = (() => {
       const tier = _tierForRankPoints(next);
       const sign = delta > 0 ? '+' : '';
       _el('vs-rank-result').textContent = `RANK: ${myRank} ${sign}${delta} = ${next} (${tier.label})`;
+      if (_currentUser) upsertUserProfile(_currentUser, { rankPoints: next }).catch(() => {});
       if (_currentUser) saveCloudSave(_currentUser.uid, _cloudSavePayload()).catch(() => {});
     } else {
       const current = _getRankPoints(_currentUser?.uid);
@@ -906,10 +1950,15 @@ const vsSession = (() => {
   function _exitToMenu() {
     _el('vs-opp-panel').classList.add('hidden');
     _setDominanceVisible(false);
+    _setVisible(_el('vs-menu-toggle-btn'), false);
+    _setVisible(_el('vs-menu-panel'), false);
+    _setVisible(_el('vs-chat-panel'), false);
+    document.body.classList.remove('vs-active');
     _setVisible(mainApp, false);
     _setVisible(startScreen, true);
     _updateStartScreen();
     if (game) { game._vsMode = false; game._isGameOver = false; }
+    _updateMyPresence();
   }
 
   // ── Listeners ──────────────────────────────────────────────────────────────
@@ -919,7 +1968,8 @@ const vsSession = (() => {
 
   // Quick match
   _el('vs-quick-btn').addEventListener('click', async () => {
-    if (!_currentUser) return;
+    if (!navigator.onLine) { showToast(t('noInternet')); return; }
+    if (!_currentUser) { showToast(t('signInRequired')); return; }
     _el('vs-quick-btn').disabled = true;
     try {
       _countdownStarted = false;
@@ -947,7 +1997,8 @@ const vsSession = (() => {
 
   // Create match (invite code)
   _el('vs-create-btn').addEventListener('click', async () => {
-    if (!_currentUser) return;
+    if (!navigator.onLine) { showToast(t('noInternet')); return; }
+    if (!_currentUser) { showToast(t('signInRequired')); return; }
     _el('vs-create-btn').disabled = true;
     try {
       _countdownStarted = false;
@@ -989,23 +2040,9 @@ const vsSession = (() => {
   _el('vs-join-btn').addEventListener('click', async () => {
     const code = _el('vs-code-input').value.trim().toUpperCase();
     if (code.length < 6) { showToast('6 karakterli kod gir.'); return; }
-    if (!_currentUser) return;
     _el('vs-join-btn').disabled = true;
-    try {
-      _countdownStarted = false;
-      _gameLaunched = false;
-      const result = await joinMatchByCode(code, _currentUser, _getRankPoints(_currentUser.uid));
-      _matchId = result.matchId;
-      _seed    = result.seed;
-      _role    = 'guest';
-      _unsubMatch = subscribeMatch(_matchId, _onMatchSnapshot);
-      _showScreen('vs-screen-countdown');
-      _el('vs-countdown-num').textContent = '...';
-    } catch (err) {
-      showToast('Hata: ' + (err.message || String(err)));
-    } finally {
-      _el('vs-join-btn').disabled = false;
-    }
+    await acceptInviteCode(code);
+    _el('vs-join-btn').disabled = false;
   });
 
   // Rematch
@@ -1022,6 +2059,135 @@ const vsSession = (() => {
     _exitToMenu();
   });
 
+  _el('vs-add-friend-btn')?.addEventListener('click', async () => {
+    _setVisible(_el('vs-menu-panel'), false);
+    if (!_currentUser) return;
+    const oppUid = _getOpponentUid();
+    if (!oppUid) {
+      const email = window.prompt(t('socialEnterEmail'));
+      if (!email) return;
+      if (!email.includes('@')) { showToast(t('socialInvalidEmail')); return; }
+      try {
+        await sendFriendRequestByEmail(_currentUser, email);
+        showToast(t('socialFriendRequestSent'));
+      } catch (err) {
+        showToast(String(err?.message || err));
+      }
+      return;
+    }
+    try {
+      await sendFriendRequest(_currentUser, oppUid, { matchId: _matchId });
+      showToast(t('socialFriendRequestSent'));
+    } catch (err) {
+      showToast(String(err?.message || err));
+    }
+  });
+
+  async function _respondVsFriendRequest(action) {
+    const toast = _el('vs-friend-request-toast');
+    const requestId = toast?.dataset?.requestId;
+    if (!requestId || !_currentUser) return;
+    try {
+      await respondFriendRequest(_currentUser, requestId, action, { matchId: _matchId });
+      _dismissedVsRequestIds.add(requestId);
+      _setVisible(toast, false);
+      if (action === 'accept') {
+        showToast('Arkadaslik istegi kabul edildi.');
+      } else {
+        showToast('Istek reddedildi. Bu maca ozel tekrar gonderilemez.');
+      }
+    } catch (err) {
+      showToast(String(err?.message || err));
+    }
+  }
+
+  _el('vs-fr-accept-btn')?.addEventListener('click', () => {
+    _respondVsFriendRequest('accept');
+  });
+
+  _el('vs-fr-reject-btn')?.addEventListener('click', () => {
+    _respondVsFriendRequest('reject');
+  });
+
+  _el('vs-voice-btn')?.addEventListener('click', async () => {
+    _setVisible(_el('vs-menu-panel'), false);
+    await _setMicEnabled(!_voiceEnabled);
+  });
+
+  _el('vs-report-btn')?.addEventListener('click', async () => {
+    _setVisible(_el('vs-menu-panel'), false);
+    const reportedUid = _getOpponentUid();
+    if (!_matchId || !_currentUser?.uid || !reportedUid) return;
+    const reason = window.prompt('Report reason (abuse, cheating, spam, other)') || 'other';
+    const details = window.prompt('Optional details') || '';
+    try {
+      await submitPlayerReport({
+        matchId: _matchId,
+        reporterUid: _currentUser.uid,
+        reportedUid,
+        reason,
+        details,
+      });
+      showToast(t('socialReportSent'));
+    } catch (err) {
+      showToast(String(err?.message || err));
+    }
+  });
+
+  _el('vs-surrender-btn')?.addEventListener('click', async () => {
+    _setVisible(_el('vs-menu-panel'), false);
+    const opponentUid = _getOpponentUid();
+    if (!_matchId || !_currentUser?.uid || !opponentUid) return;
+    if (!window.confirm('Teslim olmak istiyor musun?')) return;
+
+    _myFinalScore = game?.scoreSystem?.score ?? 0;
+    _showLocalLoseImmediate(_myFinalScore);
+
+    try {
+      _finishRequested = true;
+      await finishMatch(_matchId, opponentUid);
+      showToast('Teslim oldun.');
+    } catch (err) {
+      _finishRequested = false;
+      showToast(String(err?.message || err));
+    }
+  });
+
+  _el('vs-menu-toggle-btn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    const panel = _el('vs-menu-panel');
+    if (!panel) return;
+    panel.classList.toggle('hidden');
+  });
+
+  document.addEventListener('pointerdown', e => {
+    const panel = _el('vs-menu-panel');
+    const toggle = _el('vs-menu-toggle-btn');
+    if (!panel || panel.classList.contains('hidden')) return;
+    if (panel.contains(e.target) || toggle?.contains(e.target)) return;
+    panel.classList.add('hidden');
+  });
+
+  const _sendVsChat = async () => {
+    if (!_matchId || !_currentUser) return;
+    const input = _el('vs-chat-input');
+    const text = input?.value?.trim();
+    if (!text) return;
+    input.value = '';
+    try {
+      await sendMatchChatMessage(_matchId, _currentUser, text);
+    } catch (err) {
+      showToast(String(err?.message || err));
+    }
+  };
+
+  _el('vs-chat-send-btn')?.addEventListener('click', _sendVsChat);
+  _el('vs-chat-input')?.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    _sendVsChat();
+  });
+
   function markLocalMove() {
     _lastLocalMoveAt = Date.now();
     _syncMyState({ gameOver: false, loseReason: null });
@@ -1032,15 +2198,65 @@ const vsSession = (() => {
     _updateDominanceBar();
   }
 
-  return { openLobby, reportGameOver, markLocalMove, updateMyLiveScore };
+  function onFriendRequestsChanged() {
+    _syncVsFriendRequestToast();
+  }
+
+  return {
+    openLobby,
+    reportGameOver,
+    markLocalMove,
+    updateMyLiveScore,
+    onFriendRequestsChanged,
+    inviteFriend,
+    acceptInviteCode,
+  };
 })();
+
+_el('vs-invite-accept-btn')?.addEventListener('click', async () => {
+  const invite = _incomingVsInvites[0];
+  if (!invite || !_currentUser) return;
+  try {
+    await respondVsInvite(_currentUser, invite.id, 'accept');
+    _incomingVsInvites = _incomingVsInvites.filter(r => r.id !== invite.id);
+    _renderVsInviteNotice();
+    await vsSession.acceptInviteCode(invite.inviteCode);
+  } catch (err) {
+    showToast(String(err?.message || err));
+  }
+});
+
+_el('vs-invite-reject-btn')?.addEventListener('click', async () => {
+  const invite = _incomingVsInvites[0];
+  if (!invite || !_currentUser) return;
+  try {
+    await respondVsInvite(_currentUser, invite.id, 'reject');
+    _incomingVsInvites = _incomingVsInvites.filter(r => r.id !== invite.id);
+    _renderVsInviteNotice();
+    showToast('VS daveti reddedildi.');
+  } catch (err) {
+    showToast(String(err?.message || err));
+  }
+});
 
 // ── Settings button ───────────────────────────────────────────────────────────
 
 _el('ss-settings-btn').addEventListener('click', () => {
+  _settingsReturnTarget = 'start';
   showPage('settings');
   _setVisible(startScreen, false);
   _setVisible(mainApp, true);
+});
+
+_el('settings-back-btn')?.addEventListener('click', () => {
+  if (_settingsReturnTarget === 'start') {
+    _setVisible(mainApp, false);
+    _setVisible(startScreen, true);
+    _updateStartScreen();
+    _syncNavForPage('play');
+    return;
+  }
+  showPage(_settingsReturnTarget || 'play');
 });
 
 // ── Restart ───────────────────────────────────────────────────────────────────
@@ -1050,6 +2266,18 @@ _el('restart-btn').addEventListener('click', () => {
   overlayEl.classList.add('hidden');
   game.restart();
   showPage('play');
+  _syncPlayHudVisibility(game?._mode);
+});
+
+_el('gameover-menu-btn')?.addEventListener('click', () => {
+  overlayEl.classList.add('hidden');
+  if (game?._isGameOver) {
+    game.restart({ mode: game._mode });
+  }
+  _setVisible(mainApp, false);
+  _setVisible(startScreen, true);
+  _updateStartScreen();
+  _syncNavForPage('play');
 });
 
 // ── Watch Ad (simulated) ──────────────────────────────────────────────────────
@@ -1112,17 +2340,268 @@ function _avatarUrl(url) {
   return url ? url.replace(/=s\d+(-c)?$/, '=s96-c') : '';
 }
 
+function _pickProfileAvatar(user, profileDoc = null) {
+  const uid = user?.uid;
+  const googlePhoto = _avatarUrl(user?.photoURL || '');
+  const cached = _readLocalAvatar(uid);
+  const docPhoto = _avatarUrl(profileDoc?.photoURL || '');
+
+  if (cached?.googlePhoto && googlePhoto && cached.googlePhoto !== googlePhoto) {
+    const next = { ...cached, googlePhoto, updatedAt: Date.now() };
+    if (cached.source === 'google') next.value = googlePhoto;
+    _writeLocalAvatar(uid, next);
+    return next.value || googlePhoto || docPhoto;
+  }
+
+  if (cached?.value) return cached.value;
+  if (docPhoto) return docPhoto;
+  return googlePhoto;
+}
+
+async function _banCurrentUser(reason = 'unsafe_avatar') {
+  if (!_currentUser?.uid) return;
+  const uid = _currentUser.uid;
+  localStorage.setItem(_blockKey(uid), '1');
+  await updateUserProfile(uid, {
+    accountBlocked: true,
+    blockReason: reason,
+    blockedAt: Date.now(),
+  }).catch(() => {});
+  showToast('Hesap guvenlik nedeniyle engellendi.');
+  await googleSignOut().catch(() => {});
+}
+
+async function _loadUserDoc(uid) {
+  if (!uid) return null;
+  const s = await getFirebaseServices();
+  const snap = await s.getDoc(s.doc(s.db, 'users', uid));
+  return snap.exists() ? (snap.data() || null) : null;
+}
+
+async function _autofillLocation() {
+  if (!profileLocationStatusEl) return;
+  if (!navigator?.geolocation) {
+    profileLocationStatusEl.textContent = 'Konum desteklenmiyor.';
+    return;
+  }
+
+  profileLocationStatusEl.textContent = 'Konum aliniyor...';
+  navigator.geolocation.getCurrentPosition(async pos => {
+    const lat = Number(pos.coords?.latitude || 0);
+    const lng = Number(pos.coords?.longitude || 0);
+    const text = await _reverseGeocode(lat, lng);
+    if (profileLocationInputEl) profileLocationInputEl.value = text;
+    _profileLocationGeo = { lat, lng, source: 'gps' };
+    profileLocationStatusEl.textContent = 'Konum otomatik dolduruldu.';
+  }, () => {
+    _profileLocationGeo = null;
+    profileLocationStatusEl.textContent = 'Izin verilmedi, elle girilebilir.';
+  }, { enableHighAccuracy: false, timeout: 10_000, maximumAge: 60_000 });
+}
+
+async function _fetchLocationSuggestions(queryText) {
+  const q = String(queryText || '').trim();
+  if (q.length < 2) return [];
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&q=${encodeURIComponent(q)}`;
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    const rows = await res.json();
+    if (!Array.isArray(rows)) return [];
+    return rows.map(r => ({
+      text: String(r.display_name || '').slice(0, 120),
+      lat: Number(r.lat || 0),
+      lng: Number(r.lon || 0),
+    })).filter(r => r.text);
+  } catch {
+    return [];
+  }
+}
+
+function _renderLocationSuggestions(rows = []) {
+  if (!profileLocationSuggestionsEl) return;
+  profileLocationSuggestionsEl.innerHTML = '';
+  rows.forEach(row => {
+    const option = document.createElement('option');
+    option.value = row.text;
+    option.dataset.lat = String(row.lat || 0);
+    option.dataset.lng = String(row.lng || 0);
+    profileLocationSuggestionsEl.appendChild(option);
+  });
+}
+
+async function _resolveLocationGeo(locationText) {
+  const text = String(locationText || '').trim();
+  if (!text) return null;
+  const options = [...(profileLocationSuggestionsEl?.options || [])];
+  const picked = options.find(o => o.value === text);
+  if (picked) {
+    return {
+      lat: Number(picked.dataset.lat || 0),
+      lng: Number(picked.dataset.lng || 0),
+      source: 'suggestion',
+    };
+  }
+
+  const rows = await _fetchLocationSuggestions(text);
+  const top = rows[0];
+  if (!top) return null;
+  return { lat: top.lat, lng: top.lng, source: 'search' };
+}
+
+function _renderAvatarHistoryOptions() {
+  if (!profileAvatarHistoryEl || !_currentUser?.uid) return;
+  const rows = _readAvatarHistory(_currentUser.uid);
+  profileAvatarHistoryEl.innerHTML = '';
+  rows.forEach(value => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'profile-avatar-history-btn';
+    btn.title = 'Kayitli avatar';
+    const img = document.createElement('img');
+    img.src = value;
+    img.alt = 'Kayitli avatar';
+    btn.appendChild(img);
+    btn.onclick = () => {
+      _profileAvatarDraft = { source: 'history', value };
+      if (profileAvatarPreviewEl) profileAvatarPreviewEl.src = value;
+      _setProfileError('');
+    };
+    profileAvatarHistoryEl.appendChild(btn);
+  });
+}
+
+async function _handleAvatarUpload(file) {
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    _setProfileError('Sadece gorsel dosya yuklenebilir.');
+    return;
+  }
+
+  const dataUrl = await new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result || ''));
+    fr.onerror = reject;
+    fr.readAsDataURL(file);
+  }).catch(() => '');
+
+  if (!dataUrl) {
+    _setProfileError('Fotograf okunamadi.');
+    return;
+  }
+
+  const moderation = await _runAvatarModeration({ fileName: file.name, dataUrl });
+  if (!moderation.safe) {
+    await _banCurrentUser(moderation.reason || 'unsafe_avatar');
+    return;
+  }
+
+  _profileAvatarDraft = { source: 'upload', value: dataUrl };
+  _pushAvatarHistory(_currentUser?.uid, dataUrl);
+  if (profileAvatarPreviewEl) profileAvatarPreviewEl.src = dataUrl;
+  _renderAvatarHistoryOptions();
+  _setProfileError('');
+}
+
+async function _openProfileSetup({ force = false } = {}) {
+  if (!_currentUser?.uid || !profileSetupOverlayEl) return;
+  const uid = _currentUser.uid;
+  const profileDoc = await _loadUserDoc(uid).catch(() => null);
+  _profileDocCache = profileDoc;
+  if (profileDoc?.accountBlocked || localStorage.getItem(_blockKey(uid)) === '1') {
+    await _banCurrentUser(profileDoc?.blockReason || 'blocked');
+    return;
+  }
+
+  const done = localStorage.getItem(_profileSetupDoneKey(uid)) === '1';
+  if (!force && done && _isProfileComplete(profileDoc || {})) return;
+
+  const cachedAvatar = _readLocalAvatar(uid);
+  const avatar = _pickProfileAvatar(_currentUser, profileDoc || {});
+  _profileAvatarDraft = avatar ? { source: cachedAvatar?.source || 'google', value: avatar } : null;
+
+  if (profileDisplayNameInputEl) profileDisplayNameInputEl.value = profileDoc?.displayName || _currentUser.displayName || '';
+  if (profileBirthDateInputEl) profileBirthDateInputEl.value = profileDoc?.birthDate || '';
+  if (profileGenderSelectEl) profileGenderSelectEl.value = profileDoc?.gender || '';
+  if (profileLocationInputEl) profileLocationInputEl.value = profileDoc?.locationText || '';
+  _profileLocationGeo = profileDoc?.locationGeo || null;
+  if (profileAvatarPreviewEl) profileAvatarPreviewEl.src = avatar || '';
+  if (profileLocationStatusEl) profileLocationStatusEl.textContent = '';
+  _setProfileError('');
+  _renderAvatarHistoryOptions();
+
+  _setVisible(profileSetupOverlayEl, true);
+}
+
+async function _saveProfileSetup() {
+  if (!_currentUser?.uid) return;
+  const uid = _currentUser.uid;
+  const displayName = String(profileDisplayNameInputEl?.value || '').trim();
+  const birthDate = String(profileBirthDateInputEl?.value || '').trim();
+  const gender = String(profileGenderSelectEl?.value || '').trim();
+  const locationText = String(profileLocationInputEl?.value || '').trim();
+
+  if (!displayName) return _setProfileError('Gorunen ad zorunludur.');
+  if (!birthDate) return _setProfileError('Dogum tarihi zorunludur.');
+  if (!gender) return _setProfileError('Cinsiyet seciniz.');
+
+  if (locationText && !_profileLocationGeo) {
+    _profileLocationGeo = await _resolveLocationGeo(locationText);
+  }
+
+  const avatar = _profileAvatarDraft?.value || _pickProfileAvatar(_currentUser, _profileDocCache || {}) || '';
+  const googlePhoto = _avatarUrl(_currentUser.photoURL || '');
+  const avatarSource = _profileAvatarDraft?.source || 'google';
+
+  await updateUserProfile(uid, {
+    displayName,
+    birthDate,
+    gender,
+    locationText: locationText || null,
+    locationGeo: _profileLocationGeo || null,
+    profileCompleted: true,
+    photoURL: avatar || null,
+    avatarSource,
+    googlePhotoURL: googlePhoto || null,
+  });
+
+  _writeLocalAvatar(uid, {
+    source: avatarSource,
+    value: avatar,
+    googlePhoto,
+    updatedAt: Date.now(),
+  });
+  _pushAvatarHistory(uid, avatar);
+
+  localStorage.setItem(_profileSetupDoneKey(uid), '1');
+  _setVisible(profileSetupOverlayEl, false);
+
+  const patchedUser = {
+    ..._currentUser,
+    displayName,
+    photoURL: avatar || _currentUser.photoURL,
+  };
+  _applyAuthUI(patchedUser);
+  _renderFriendsPanel();
+}
+
 /** Sync all UI elements that reflect sign-in state. */
 function _applyAuthUI(user) {
   _currentUser = user;
   const signedIn = !!user;
+  if (!signedIn) {
+    // Legacy guest rank key cleanup: guests no longer have rank.
+    localStorage.removeItem(RANK_KEY_PREFIX);
+  }
+  _setVisible(friendsBtn, signedIn);
+  if (!signedIn) _setVisible(friendsPanel, false);
 
   // Start screen
   _setVisible(_el('ss-profile'),    signedIn);
   _setVisible(_el('ss-signin-btn'), !signedIn);
   if (signedIn) {
-    _el('ss-avatar').src              = _avatarUrl(user.photoURL);
-    _el('ss-username').textContent    = user.displayName || user.email;
+    const avatar = _pickProfileAvatar(user, _profileDocCache || {});
+    _el('ss-avatar').src              = avatar || _avatarUrl(user.photoURL);
+    _el('ss-username').textContent    = (_profileDocCache?.displayName || user.displayName || user.email || 'Player');
   }
   _updateRankBadges(user?.uid);
 
@@ -1136,8 +2615,9 @@ function _applyAuthUI(user) {
   _setVisible(out, !signedIn);
   _setVisible(ind,  signedIn);
   if (signedIn) {
-    _el('settings-avatar').src              = _avatarUrl(user.photoURL);
-    _el('settings-username').textContent    = user.displayName || '';
+    const avatar = _pickProfileAvatar(user, _profileDocCache || {});
+    _el('settings-avatar').src              = avatar || _avatarUrl(user.photoURL);
+    _el('settings-username').textContent    = (_profileDocCache?.displayName || user.displayName || '');
     _el('settings-email').textContent       = user.email || '';
   }
 }
@@ -1168,6 +2648,7 @@ async function _handleSignOut(e) {
   try {
     if (startBtn) startBtn.disabled = true;
     if (settingsBtn) settingsBtn.disabled = true;
+    if (_currentUser) await setPresence(_currentUser, 'offline').catch(() => {});
     await googleSignOut();
   } catch (err) {
     _applyAuthUI(null);
@@ -1177,8 +2658,65 @@ async function _handleSignOut(e) {
   }
 }
 
+window.addEventListener('beforeunload', () => {
+  if (_currentUser) setPresence(_currentUser, 'offline').catch(() => {});
+});
+
 _el('ss-signin-btn').addEventListener('click', _handleSignIn);
 _el('ss-signout-btn').addEventListener('click', _handleSignOut);
+_el('settings-edit-profile-btn')?.addEventListener('click', () => {
+  _openProfileSetup({ force: true }).catch(() => {});
+});
+_el('profile-setup-save-btn')?.addEventListener('click', () => {
+  _saveProfileSetup().catch(err => _setProfileError(String(err?.message || err)));
+});
+_el('profile-detect-location-btn')?.addEventListener('click', () => {
+  _autofillLocation();
+});
+profileLocationInputEl?.addEventListener('input', () => {
+  _profileLocationGeo = null;
+  const q = String(profileLocationInputEl.value || '').trim();
+  if (profileLocationStatusEl) profileLocationStatusEl.textContent = '';
+  if (_locationSuggestTimer) clearTimeout(_locationSuggestTimer);
+  _locationSuggestTimer = setTimeout(async () => {
+    const rows = await _fetchLocationSuggestions(q);
+    _renderLocationSuggestions(rows);
+  }, 260);
+});
+profileLocationInputEl?.addEventListener('change', async () => {
+  const text = String(profileLocationInputEl.value || '').trim();
+  if (!text) {
+    _profileLocationGeo = null;
+    return;
+  }
+  _profileLocationGeo = await _resolveLocationGeo(text);
+});
+profileAvatarGoogleBtnEl?.addEventListener('click', () => {
+  const google = _avatarUrl(_currentUser?.photoURL || '');
+  if (!google) {
+    _setProfileError('Google avatar bulunamadi.');
+    return;
+  }
+  _profileAvatarDraft = { source: 'google', value: google };
+  if (profileAvatarPreviewEl) profileAvatarPreviewEl.src = google;
+  _setProfileError('');
+});
+profileAvatarUploadInputEl?.addEventListener('change', e => {
+  const file = e.target?.files?.[0];
+  _handleAvatarUpload(file).catch(() => _setProfileError('Fotograf islenemedi.'));
+  e.target.value = '';
+});
+document.querySelectorAll('.profile-avatar-preset').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const emoji = String(btn.dataset.avatar || '').trim();
+    if (!emoji) return;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><rect width="100%" height="100%" rx="36" fill="#0f172a"/><text x="50%" y="58%" font-size="148" text-anchor="middle">${emoji}</text></svg>`;
+    const data = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+    _profileAvatarDraft = { source: 'preset', value: data };
+    if (profileAvatarPreviewEl) profileAvatarPreviewEl.src = data;
+    _setProfileError('');
+  });
+});
 
 // Auth state listener
 let _lastAuthUid = null;
@@ -1186,14 +2724,79 @@ onAuthChange(async user => {
   const prevUid = _lastAuthUid;
   _lastAuthUid = user?.uid ?? null;
   _applyAuthUI(user);
+  _updateModeSelectUI();
 
   if (user && !prevUid) _captureGuestSnapshot();
   if (!user && prevUid) {
     _restoreGuestSnapshot();
+    if (_unsubFriends) { _unsubFriends(); _unsubFriends = null; }
+    if (_unsubFriendRequests) { _unsubFriendRequests(); _unsubFriendRequests = null; }
+    if (_unsubVsInvites) { _unsubVsInvites(); _unsubVsInvites = null; }
+    _friendsRows = [];
+    _friendRequestRows = [];
+    _incomingVsInvites = [];
+    _profileDocCache = null;
+    _setVisible(profileSetupOverlayEl, false);
+    _closeFriendChat();
+    _renderFriendsPanel();
+    _renderVsInviteNotice();
+    _stopPresenceHeartbeat();
+    _stopFriendsUiRefresh();
     return;
   }
 
   if (user) {
+    _profileDocCache = await _loadUserDoc(user.uid).catch(() => null);
+    if (_profileDocCache?.accountBlocked || localStorage.getItem(_blockKey(user.uid)) === '1') {
+      await _banCurrentUser(_profileDocCache?.blockReason || 'blocked');
+      return;
+    }
+
+    const googlePhoto = _avatarUrl(user.photoURL || '');
+    const avatarCache = _readLocalAvatar(user.uid);
+    if (!avatarCache) {
+      _writeLocalAvatar(user.uid, {
+        source: 'google',
+        value: googlePhoto,
+        googlePhoto,
+        updatedAt: Date.now(),
+      });
+    } else if (avatarCache.googlePhoto !== googlePhoto) {
+      const next = { ...avatarCache, googlePhoto, updatedAt: Date.now() };
+      if (avatarCache.source === 'google') next.value = googlePhoto;
+      _writeLocalAvatar(user.uid, next);
+      if (avatarCache.source === 'google') {
+        await updateUserProfile(user.uid, { photoURL: googlePhoto || null, googlePhotoURL: googlePhoto || null }).catch(() => {});
+      }
+    }
+
+    _applyAuthUI(user);
+
+    if (_unsubFriends) _unsubFriends();
+    if (_unsubFriendRequests) _unsubFriendRequests();
+    if (_unsubVsInvites) _unsubVsInvites();
+    if (navigator.onLine) {
+      _unsubFriends = subscribeFriends(user, rows => {
+        _friendsRows = rows;
+        _renderFriendsPanel();
+      });
+      _unsubFriendRequests = subscribeFriendRequests(user, rows => {
+        _friendRequestRows = rows;
+        _renderFriendsPanel();
+        vsSession.onFriendRequestsChanged();
+      });
+      _unsubVsInvites = subscribeIncomingVsInvites(user, rows => {
+        _incomingVsInvites = rows;
+        _renderVsInviteNotice();
+      });
+      _updateMyPresence();
+      _startPresenceHeartbeat();
+      _startFriendsUiRefresh();
+    }
+    upsertUserProfile(user, {
+      rankPoints: _getRankPoints(user.uid),
+      photoURL: _pickProfileAvatar(user, _profileDocCache || {}),
+    }).catch(() => {});
     // Load cloud save and apply account state for signed-in user.
     try {
       const cloud = await loadCloudSave(user.uid);
@@ -1232,6 +2835,10 @@ onAuthChange(async user => {
       }
       // Save current state to cloud
       saveCloudSave(user.uid, _cloudSavePayload()).catch(() => {});
+
+      _profileDocCache = await _loadUserDoc(user.uid).catch(() => _profileDocCache);
+      _applyAuthUI(user);
+      await _openProfileSetup({ force: false });
     } catch (e) {
       // cloud sync error — silent in production
     }
@@ -1557,7 +3164,7 @@ function _makeSkinCard(skin) {
         game.renderer.setSkin(skin);
         game._renderTray();
         if (isGameOver(game.tray.filter(Boolean), game.grid))
-          setTimeout(() => game._gameOver(), 400);
+          setTimeout(() => game._gameOver({ reason: 'no_moves' }), 400);
       }
       renderSkinsPage();
     });
@@ -1632,6 +3239,8 @@ function showGainFloat({ scoreDelta = 0, coins = 0 }) {
 // ── Market page ───────────────────────────────────────────────────────────────
 
 function _makeMarketItem(pu) {
+  const puName = t(pu.nameKey || pu.id);
+  const puDesc = t(pu.descKey || `${pu.id}_desc`);
   const item = document.createElement('div');
   item.className = 'market-item';
 
@@ -1640,7 +3249,7 @@ function _makeMarketItem(pu) {
 
   const info = document.createElement('div');
   info.className = 'market-item-info';
-  info.innerHTML = `<div class="market-item-name">${pu.name}</div><div class="market-item-desc">${pu.desc}</div>`;
+  info.innerHTML = `<div class="market-item-name">${puName}</div><div class="market-item-desc">${puDesc}</div>`;
 
   const cnt = document.createElement('span');
   cnt.className = 'market-count';
@@ -1655,12 +3264,12 @@ function _makeMarketItem(pu) {
     if (r.type === 'noCoins') { showToast(t('needMoreCoins')); return; }
     updateCoinDisplays();
     renderMarketPage();
-    showToast(`${t('got')} ${pu.name}!`);
+    showToast(`${t('got')} ${puName}!`);
   });
 
   const useBtn = document.createElement('button');
   useBtn.className = 'market-use-btn';
-  useBtn.textContent = 'USE';
+  useBtn.textContent = t('use');
   useBtn.disabled = market.count(pu.id) === 0 || !game;
   useBtn.addEventListener('click', () => {
     if (!game) { showToast(t('noGame')); return; }
@@ -1883,6 +3492,10 @@ class Game {
     this._vsRole     = null;
     this._vsRng      = null;
     this._isGameOver = false;
+    this._challengeMode = mode === 'challenge';
+    this._challengeLevel = 1;
+    this._mementoHistory = [];
+    this._mementoLimit = 24;
 
     this._tutorial = {
       active: mode === 'endless' && localStorage.getItem(TUTORIAL_KEY) !== '1',
@@ -1890,6 +3503,7 @@ class Game {
       target: null,
       expectedShape: '',
       expectedColor: 0,
+      expectedClear: 'place',
     };
     this._rotateMode = {
       active: false,
@@ -1900,6 +3514,7 @@ class Game {
     this.scoreEl = _el('score-display');
     this.bestEl  = _el('best-display');
     this.comboEl = _el('combo-display');
+    this.gameContainerEl = _el('game-container');
 
     // Wire observers
     this.grid.onChange(cells => this.renderer.redrawCells(cells));
@@ -1926,11 +3541,15 @@ class Game {
     if (rotateConfirmBtn) {
       rotateConfirmBtn.onclick = () => this._finishRotateMode();
     }
+    if (tutorialSkipBtn) {
+      tutorialSkipBtn.onclick = () => this._skipTutorial();
+    }
 
     // Handle orientation / resize
     window.addEventListener('resize', () => this._handleResize());
 
-    if (this._tutorial.active) this._startTutorial();
+    if (this._challengeMode) this._startChallengeLevel(1);
+    else if (this._tutorial.active) this._startTutorial();
     else this._dealTray();
     this._loop(performance.now());
   }
@@ -1957,6 +3576,100 @@ class Game {
     return snap;
   }
 
+  _createMemento() {
+    const filled = [];
+    for (let r = 0; r < Grid.SIZE; r++) {
+      for (let c = 0; c < Grid.SIZE; c++) {
+        const cell = this.grid.get(r, c);
+        if (!cell || cell.isEmpty) continue;
+        filled.push({ row: r, col: c, colorID: cell.colorID, blockID: cell.blockID });
+      }
+    }
+    return {
+      filled,
+      tray: this.tray.map(b => {
+        if (!b) return null;
+        return {
+          id: b.id,
+          shapeKey: b.shapeKey,
+          colorID: b.colorID,
+          cells: b.cells.map(([r, c]) => [r, c]),
+          size: b.size,
+        };
+      }),
+      usedMask: [...this.usedMask],
+      placements: this.placements,
+      coinMilestone: this._coinMilestone,
+      score: this.scoreSystem.score,
+      combo: this.scoreSystem.comboMultiplier,
+      colorCap: this._colorCap,
+      challengeLevel: this._challengeLevel,
+    };
+  }
+
+  _restoreMemento(m) {
+    if (!m) return;
+    this.grid.reset();
+    for (const p of m.filled) {
+      this.grid.fill(p.row, p.col, p.colorID, p.blockID || 'undo');
+    }
+    const dirty = this.grid.drainDirty();
+    this.grid._emit(dirty);
+
+    this.tray = (m.tray || []).map(item => {
+      if (!item) return null;
+      if (!item.shapeKey.endsWith('_rot')) return new Block(item.shapeKey, item.colorID);
+      return _makeRotatedBlock(new Block('DOT', item.colorID), item.cells);
+    });
+    this.usedMask = [...(m.usedMask || [])];
+    this.placements = Number(m.placements || 0);
+    this._coinMilestone = Number(m.coinMilestone || 0);
+    this._colorCap = Number(m.colorCap || this._colorCap);
+    this._challengeLevel = Number(m.challengeLevel || this._challengeLevel || 1);
+    this.scoreSystem.score = Number(m.score || 0);
+    this.scoreSystem.comboMultiplier = Number(m.combo || 1);
+    this.scoreSystem._emit();
+    this._renderTray();
+    this.renderer._drawGrid();
+  }
+
+  _pushMemento() {
+    this._mementoHistory.push(this._createMemento());
+    if (this._mementoHistory.length > this._mementoLimit)
+      this._mementoHistory.shift();
+  }
+
+  _startChallengeLevel(level = 1, { preserveProgress = false } = {}) {
+    this._challengeMode = true;
+    this._challengeLevel = Math.max(1, Number(level || 1));
+    this._mementoHistory = [];
+    this.grid.reset();
+    if (!preserveProgress) {
+      this.scoreSystem.reset();
+      this._coinMilestone = 0;
+    }
+    this.placements = 0;
+    const seed = Number(localStorage.getItem(CHALLENGE_SEED_KEY) || Date.now());
+    localStorage.setItem(CHALLENGE_SEED_KEY, String(seed + this._challengeLevel * 7919));
+    const rnd = () => {
+      const x = Math.sin((seed + this._challengeLevel * 97 + this.placements) * 0.00091) * 10000;
+      return x - Math.floor(x);
+    };
+    const density = Math.min(0.22 + this._challengeLevel * 0.04, 0.52);
+    const fillCount = Math.floor(Grid.SIZE * Grid.SIZE * density);
+    for (let i = 0; i < fillCount; i++) {
+      const row = Math.floor(rnd() * Grid.SIZE);
+      const col = Math.floor(rnd() * Grid.SIZE);
+      if (!this.grid.isEmpty(row, col)) continue;
+      const colorID = 1 + Math.floor(rnd() * Math.min(8, this._colorCap + 1));
+      this.grid.fill(row, col, colorID, `challenge_seed_${this._challengeLevel}`);
+    }
+    const dirty = this.grid.drainDirty();
+    this.grid._emit(dirty);
+    this._dealTray();
+    showToast(`Meydan Okuma Seviye ${this._challengeLevel}`);
+  }
+
   _updateColorCap(score) {
     const nextCap = _colorCapForScore(score);
     if (nextCap <= this._colorCap) return;
@@ -1966,25 +3679,81 @@ class Game {
 
   _setTutorialUI(step, text) {
     _setVisible(tutorialOverlay, true);
-    if (tutorialStepEl) tutorialStepEl.textContent = `ADIM ${step}/${TUTORIAL_TOTAL_STEPS}`;
-    if (tutorialTextEl) tutorialTextEl.textContent = text;
+    if (tutorialStepEl) tutorialStepEl.textContent = `EGITICI ${step}/${TUTORIAL_TOTAL_STEPS}`;
+    if (text) {
+      let descEl = _el('tutorial-desc');
+      if (!descEl) {
+        descEl = document.createElement('div');
+        descEl.id = 'tutorial-desc';
+        const card = _el('tutorial-card');
+        if (card) card.appendChild(descEl);
+      }
+      descEl.textContent = text;
+    }
+    this._renderTutorialProgress(step);
+  }
+
+  _renderTutorialProgress(step) {
+    if (!tutorialProgressEl) return;
+    if (!tutorialProgressEl.childElementCount) {
+      for (let i = 1; i <= TUTORIAL_TOTAL_STEPS; i++) {
+        const dot = document.createElement('span');
+        dot.className = 'tutorial-dot';
+        tutorialProgressEl.appendChild(dot);
+      }
+    }
+    [...tutorialProgressEl.children].forEach((el, idx) => {
+      el.classList.toggle('active', idx + 1 <= step);
+    });
+  }
+
+  _animateTutorialStepTransition() {
+    const card = _el('tutorial-card');
+    if (!card) return;
+    card.classList.remove('step-transition');
+    void card.offsetWidth;
+    card.classList.add('step-transition');
+    setTimeout(() => card.classList.remove('step-transition'), 560);
+    if (tutorialStepAnimEl) {
+      tutorialStepAnimEl.classList.remove('run');
+      void tutorialStepAnimEl.offsetWidth;
+    }
   }
 
   _startTutorial() {
+    setSkipFileSfx(true);
+    document.body.classList.add('tutorial-focus');
     this.grid.reset();
     this.scoreSystem.reset();
     this.particles._particles = [];
     this.placements = 0;
+    this._challengeMode = false;
+    this._tutorial.active = true;
     this._setupTutorialStep1();
   }
 
   _setupTutorialStep1() {
-    this._tutorial.active = true;
     this._tutorial.step = 1;
+    this._tutorial.target = { row: 7, col: 0 };
+    this._tutorial.expectedShape = 'DOT';
+    this._tutorial.expectedColor = 1;
+    this._tutorial.expectedClear = 'place';
+    this._setTutorialUI(1, 'Küçük bloğu kırmızı kutuya sürükle ve bırak');
+
+    this.grid.reset();
+    this.tray = [new Block('DOT', 1), null, null, null];
+    this.usedMask = [false, true, true, true];
+    _el('tray').classList.add('tutorial-mode');
+    this._renderTray();
+  }
+
+  _setupTutorialStep2() {
+    this._tutorial.step = 2;
     this._tutorial.target = { row: 3, col: 3 };
     this._tutorial.expectedShape = 'DOT';
     this._tutorial.expectedColor = 1;
-    this._setTutorialUI(1, 'Kirmizi tekli blogu isaretli hucreye birak. Renk birikimi ile patlama olur.');
+    this._tutorial.expectedClear = 'cluster10';
+    this._setTutorialUI(2, 'Bloğu ortadaki gri bölgeye koy. 10+ aynı renkli blok oluştur');
 
     this.grid.reset();
     const cells = [
@@ -1997,15 +3766,17 @@ class Game {
 
     this.tray = [new Block('DOT', 1), null, null, null];
     this.usedMask = [false, true, true, true];
+    _el('tray').classList.add('tutorial-mode');
     this._renderTray();
   }
 
-  _setupTutorialStep2() {
-    this._tutorial.step = 2;
+  _setupTutorialStep3() {
+    this._tutorial.step = 3;
     this._tutorial.target = { row: 5, col: 4 };
     this._tutorial.expectedShape = 'DOT';
     this._tutorial.expectedColor = 2;
-    this._setTutorialUI(2, 'Bu kez satiri tamamla. Isaretli bosluga birak ve line clear yap.');
+    this._tutorial.expectedClear = 'row';
+    this._setTutorialUI(3, 'Satırı tamamla: Renkli bloğu kalan boş yere yerleştir');
 
     this.grid.reset();
     const rowCells = [];
@@ -2015,38 +3786,162 @@ class Game {
       rowCells.push({ row: 5, col: c, color });
     }
     for (const rc of rowCells)
-      this.grid.fillMany([{ row: rc.row, col: rc.col }], rc.color, 'tutorial_seed_line');
+      this.grid.fillMany([{ row: rc.row, col: rc.col }], rc.color, 'tutorial_seed_row');
 
     this.tray = [new Block('DOT', 2), null, null, null];
     this.usedMask = [false, true, true, true];
+    _el('tray').classList.add('tutorial-mode');
     this._renderTray();
   }
 
-  _finishTutorial() {
+  _setupTutorialStep4() {
+    this._tutorial.step = 4;
+    this._tutorial.target = { row: 4, col: 2 };
+    this._tutorial.expectedShape = 'DOT';
+    this._tutorial.expectedColor = 3;
+    this._tutorial.expectedClear = 'col';
+    this._setTutorialUI(4, 'Sütunu tamamla: Dikey olarak boş alanı doldur');
+
+    this.grid.reset();
+    const colCells = [];
+    for (let r = 0; r < Grid.SIZE; r++) {
+      if (r === 4) continue;
+      const color = ((r + 1) % 4) + 1;
+      colCells.push({ row: r, col: 2, color });
+    }
+    for (const rc of colCells)
+      this.grid.fillMany([{ row: rc.row, col: rc.col }], rc.color, 'tutorial_seed_col');
+
+    this.tray = [new Block('DOT', 3), null, null, null];
+    this.usedMask = [false, true, true, true];
+    _el('tray').classList.add('tutorial-mode');
+    this._renderTray();
+  }
+
+  _setupTutorialStep5() {
+    this._tutorial.step = 5;
+    this._tutorial.target = { row: 1, col: 2 };
+    this._tutorial.expectedShape = 'H3';
+    this._tutorial.expectedColor = 4;
+    this._tutorial.expectedClear = 'any_clear';
+    this._setTutorialUI(5, '3 bloğu yan yana yerleştir. Harika! Ödül bloğun seni cezalandırabilir');
+
+    this.grid.reset();
+    const seed = [
+      { row: 1, col: 0, color: 2 },
+      { row: 1, col: 1, color: 3 },
+      { row: 1, col: 5, color: 1 },
+      { row: 1, col: 6, color: 2 },
+      { row: 1, col: 7, color: 3 },
+      { row: 4, col: 4, color: 4 },
+      { row: 5, col: 5, color: 1 },
+    ];
+    for (const rc of seed)
+      this.grid.fillMany([{ row: rc.row, col: rc.col }], rc.color, 'tutorial_seed_lucky');
+
+    this.tray = [new Block('H3', 4), null, null, null];
+    this.usedMask = [false, true, true, true];
+    _el('tray').classList.add('tutorial-mode');
+    this._renderTray();
+    showToast('BONUS! 🍀 3 bloğu yan yana koy.');
+  }
+
+  _setupTutorialStep6() {
+    this._tutorial.step = 6;
+    this._tutorial.target = { row: 0, col: 2 };
+    this._tutorial.expectedShape = 'DOT';
+    this._tutorial.expectedColor = 1;
+    this._tutorial.expectedClear = 'clean';
+    this._setTutorialUI(6, 'Oyunu tamamen temizle! Son adım için bloğu yerleştir');
+
+    this.grid.reset();
+    const seed = [];
+    for (let c = 0; c < Grid.SIZE; c++) {
+      if (c === 2) continue;
+      seed.push({ row: 0, col: c, color: (c % 4) + 1 });
+    }
+    for (const p of seed) {
+      this.grid.fillMany([{ row: p.row, col: p.col }], p.color, 'tutorial_seed_clean');
+    }
+    this.tray = [new Block('DOT', 1), null, null, null];
+    this.usedMask = [false, true, true, true];
+    _el('tray').classList.add('tutorial-mode');
+    this._renderTray();
+  }
+
+  _setupTutorialStep(step) {
+    if (step === 1) return this._setupTutorialStep1();
+    if (step === 2) return this._setupTutorialStep2();
+    if (step === 3) return this._setupTutorialStep3();
+    if (step === 4) return this._setupTutorialStep4();
+    if (step === 5) return this._setupTutorialStep5();
+    if (step === 6) return this._setupTutorialStep6();
+    this._finishTutorial();
+  }
+
+  _skipTutorial() {
+    if (!this._tutorial.active) return;
+    this._finishTutorial({ skipped: true });
+  }
+
+  _finishTutorial({ skipped = false } = {}) {
+    setSkipFileSfx(false);
+    document.body.classList.remove('tutorial-focus');
     this._tutorial.active = false;
+    _el('tray')?.classList.remove('tutorial-mode');
     this._tutorial.step = 0;
     this._tutorial.target = null;
     _setVisible(tutorialOverlay, false);
     localStorage.setItem(TUTORIAL_KEY, '1');
-    showToast('Harika! Artik normal oyundasin.');
-    this._dealTray();
+    
+    if (!skipped) {
+      const completionMsg = _el('tutorial-completion-msg');
+      if (completionMsg) {
+        _setVisible(completionMsg, true);
+        setTimeout(() => {
+          _setVisible(completionMsg, false);
+          setTimeout(() => this._returnToStartScreen(), 300);
+        }, 2200);
+      } else {
+        this._returnToStartScreen();
+      }
+    } else {
+      this._returnToStartScreen();
+    }
+  }
+
+  _returnToStartScreen() {
+    game = null;
+    _setVisible(mainApp, true);
+    _setVisible(startScreen, true);
+    if (_currentPage !== 'play') {
+      Object.entries(PAGES).forEach(([key, el]) => el.classList.toggle('hidden', key !== 'play'));
+      _currentPage = 'play';
+    }
   }
 
   _drawTutorialTarget(now) {
     if (!this._tutorial.active || !this._tutorial.target) return;
     const { row, col } = this._tutorial.target;
-    const x = this.renderer.PADDING + col * (this.renderer.CELL + this.renderer.GAP);
-    const y = this.renderer.PADDING + row * (this.renderer.CELL + this.renderer.GAP);
-    const sz = this.renderer.CELL;
+    const block = this.tray[0];
+    const positions = block ? block.getAbsolutePositions(row, col) : [{row, col}];
+    
     const ctx = this.renderer.fxCtx;
     const pulse = 0.55 + (Math.sin(now / 180) + 1) * 0.2;
-
+    
     ctx.save();
     ctx.strokeStyle = `rgba(196,181,253,${pulse})`;
     ctx.lineWidth = 3;
-    ctx.strokeRect(x - 2, y - 2, sz + 4, sz + 4);
     ctx.fillStyle = `rgba(196,181,253,${0.15 + pulse * 0.12})`;
-    ctx.fillRect(x, y, sz, sz);
+    
+    // Draw all affected cells
+    for (const pos of positions) {
+      const x = this.renderer.PADDING + pos.col * (this.renderer.CELL + this.renderer.GAP);
+      const y = this.renderer.PADDING + pos.row * (this.renderer.CELL + this.renderer.GAP);
+      const sz = this.renderer.CELL;
+      ctx.strokeRect(x - 2, y - 2, sz + 4, sz + 4);
+      ctx.fillRect(x, y, sz, sz);
+    }
     ctx.restore();
   }
 
@@ -2063,27 +3958,31 @@ class Game {
     return true;
   }
 
-  _handleTutorialAfterClear(result) {
+  _handleTutorialAfterClear(result, didClean) {
     if (!this._tutorial.active) return;
-    if (this._tutorial.step === 1) {
-      if (result.colorClusters.length > 0) {
-        showToast('Super! Simdi satir temizleme adimi.');
-        setTimeout(() => this._setupTutorialStep2(), 450);
-      }
+    const expected = this._tutorial.expectedClear;
+    const success = expected === 'place'
+      || (expected === 'cluster10' && result.colorClusters.some(cl => cl.length >= 10))
+      || (expected === 'row' && result.clearedRows.length > 0)
+      || (expected === 'col' && result.clearedCols.length > 0)
+      || (expected === 'any_clear' && result.totalCleared > 0)
+      || (expected === 'clean' && didClean);
+
+    if (!success) {
+      showToast('Bu adimda hedeflenen sonucu olusturmadin, tekrar deneyelim.');
+      const current = this._tutorial.step;
+      setTimeout(() => this._setupTutorialStep(current), 520);
       return;
     }
-    if (this._tutorial.step === 2) {
-      if (result.clearedRows.length > 0 || result.clearedCols.length > 0) {
-        this._tutorial.step = 3;
-        this._setTutorialUI(3, 'Bazen sansli bir blok gelir. Ekranda LUCKY gorursen tabloya en faydali sekil gelmistir.');
-        setTimeout(() => {
-          if (!this._tutorial.active) return;
-          this._tutorial.step = 4;
-          this._setTutorialUI(4, 'Tek bir hamlede tum tablo temizlenirse CLEAN olur, ekstra puan kazanirsin.');
-          setTimeout(() => this._finishTutorial(), 2200);
-        }, 2200);
-      }
+
+    if (this._tutorial.step >= TUTORIAL_TOTAL_STEPS) {
+      setTimeout(() => this._finishTutorial(), 650);
+      return;
     }
+
+    const nextStep = this._tutorial.step + 1;
+    this._animateTutorialStepTransition();
+    setTimeout(() => this._setupTutorialStep(nextStep), 520);
   }
 
   _enterRotateMode() {
@@ -2158,17 +4057,36 @@ class Game {
     else if (m >= 4) color = '#a855f7'; // x4+ purple
     this.comboEl.style.setProperty('--combo-color', color);
     this.comboEl.classList.toggle('combo-active', m >= 2);
+    if (this.gameContainerEl) {
+      this.gameContainerEl.style.setProperty('--combo-bloom-color', color);
+      this.gameContainerEl.classList.toggle('combo-bloom-active', m >= 2);
+      if (m < 2) this.gameContainerEl.classList.remove('combo-bloom-pulse');
+    }
   }
 
   _triggerComboFire() {
     this.comboEl.classList.remove('combo-fired');
     void this.comboEl.offsetWidth;
     this.comboEl.classList.add('combo-fired');
+    if (this.gameContainerEl) {
+      this.gameContainerEl.classList.remove('combo-bloom-pulse');
+      void this.gameContainerEl.offsetWidth;
+      this.gameContainerEl.classList.add('combo-bloom-pulse');
+    }
   }
 
   // ── Tray ───────────────────────────────────────────────────────────────────
 
+  _smartAggressionForCurrentMode() {
+    if (this._vsMode) return 0.08;
+    if (this._challengeMode) return 0.78;
+    if (this._tutorial.active) return 1;
+    if (this.scoreSystem.score < 2200 || this.placements < 10) return 0.92;
+    return 0.62;
+  }
+
   _dealTray() {
+    if (!this._tutorial.active) _el('tray')?.classList.remove('tutorial-mode');
     if (this._vsMode && this._vsRng) {
       // VS mode: use shared seeded RNG — same block sequence for both players, no Lucky
       this.tray = Array.from({ length: TRAY_SIZE }, () =>
@@ -2176,11 +4094,18 @@ class Game {
       this.usedMask = new Array(TRAY_SIZE).fill(false);
       this._renderTray();
       if (isGameOver(this.tray.filter(Boolean), this.grid))
-        setTimeout(() => this._gameOver(), 400);
+        setTimeout(() => this._gameOver({ reason: 'no_moves' }), 400);
       return;
     }
     const hard   = this.placements > 0 && this.placements % HARD_EVERY === 0;
-    this.tray     = generateTray(this.grid, TRAY_SIZE, hard, this._colorCap);
+    const smartProfile = this._challengeMode
+      ? 'hard'
+      : (this.placements < 10 || this.scoreSystem.score < 2200 ? 'early' : 'normal');
+    const smartAggression = this._smartAggressionForCurrentMode();
+    this.tray = generateTray(this.grid, TRAY_SIZE, hard, this._colorCap, {
+      smartProfile,
+      smartAggression,
+    });
     const luckyChance = _luckyChanceForScore(this.scoreSystem.score);
     if (!this._tutorial.active && this.placements > 0 && Math.random() < luckyChance) {
       const lucky = _findLuckyBlock(this.grid, this._colorCap);
@@ -2193,7 +4118,7 @@ class Game {
     this.usedMask = new Array(TRAY_SIZE).fill(false);
     this._renderTray();
     if (isGameOver(this.tray.filter(Boolean), this.grid))
-      setTimeout(() => this._gameOver(), 400);
+      setTimeout(() => this._gameOver({ reason: 'no_moves' }), 400);
   }
 
   _renderTray() {
@@ -2221,11 +4146,14 @@ class Game {
   // ── Drop ───────────────────────────────────────────────────────────────────
 
   _handleDrop(block, el, row, col) {
+    if (this._isGameOver) return;
     if (this._rotateMode.active) return;
     if (!this._isTutorialDropValid(block, row, col)) return;
 
     const positions = block.getAbsolutePositions(row, col);
     if (!this.grid.canPlace(positions)) return;
+
+    this._pushMemento();
 
     // Snapshot colors before placement (for particles)
     const snap = this._buildSnap();
@@ -2240,6 +4168,7 @@ class Game {
     if (idx !== -1) this._markUsed(idx);
 
     const result = runClearingLogic(this.grid, positions);
+    let didClean = false;
     if (result.totalCleared > 0) {
       this.particles.burstCells(result.cleared, PALETTE, snap);
       const { delta, label } = this.scoreSystem.record({
@@ -2259,6 +4188,7 @@ class Game {
 
       // CLEAN: single placement ended with a fully empty board
       if (this.grid.getFilledCells().length === 0) {
+        didClean = true;
         this.scoreSystem.score += CLEAN_BONUS_POINTS;
         totalGain += CLEAN_BONUS_POINTS;
         if (this.scoreSystem.score > this.scoreSystem.best) {
@@ -2278,10 +4208,20 @@ class Game {
       this.scoreSystem.breakCombo();
     }
 
-    this._handleTutorialAfterClear(result);
+    this._handleTutorialAfterClear(result, didClean);
+
+    if (this._challengeMode && this.grid.getFilledCells().length === 0) {
+      const nextLevel = this._challengeLevel + 1;
+      const bonus = Math.round(250 * Math.max(1, nextLevel * 0.75));
+      this.scoreSystem.score += bonus;
+      this.scoreSystem._emit();
+      showToast(`Seviye Temizlendi! +${bonus}  •  Sonraki: ${nextLevel}`);
+      setTimeout(() => this._startChallengeLevel(nextLevel, { preserveProgress: true }), 550);
+      return;
+    }
 
     if (this.tray.filter(Boolean).length > 0 && isGameOver(this.tray.filter(Boolean), this.grid))
-      setTimeout(() => this._gameOver(), 400);
+      setTimeout(() => this._gameOver({ reason: 'no_moves' }), 400);
   }
 
   // ── Loop ───────────────────────────────────────────────────────────────────
@@ -2302,9 +4242,38 @@ class Game {
 
   // ── Game over ──────────────────────────────────────────────────────────────
 
-  _gameOver() {
+  _gameOver({ reason = 'unknown' } = {}) {
+    if (this._isGameOver) return;
     this._isGameOver = true;
     this._finishRotateMode();
+    this.renderer.setDragEnabled(false);
+
+    if (this.gameContainerEl) {
+      this.gameContainerEl.classList.remove('game-container--shake');
+      void this.gameContainerEl.offsetWidth;
+      this.gameContainerEl.classList.add('game-container--shake');
+      setTimeout(() => {
+        this.gameContainerEl?.classList.remove('game-container--shake');
+      }, 260);
+    }
+
+    if (reason === 'no_moves') {
+      showToast('Yapilacak hamle kalmadi!');
+    }
+
+    const filled = this.grid.getFilledCells();
+    const overlayDelay = filled.length ? 320 : 0;
+    if (filled.length) {
+      const snap = this._buildSnap();
+      this.particles.burstCells(filled, PALETTE, snap);
+      playMega();
+      setTimeout(() => {
+        if (!this._isGameOver) return;
+        this.grid.reset();
+        const dirty = this.grid.drainDirty();
+        this.grid._emit(dirty);
+      }, 220);
+    }
 
     // VS mode: report to opponent, show overlay after brief delay, skip normal game-over UI
     if (this._vsMode) {
@@ -2312,10 +4281,21 @@ class Game {
       return;
     }
 
+    if (this._challengeMode) {
+      _submitChallengeScore({
+        level: this._challengeLevel,
+        score: this.scoreSystem.score,
+      });
+      renderChallengeLeaderboards();
+    }
+
     const earned = this._coinMilestone; // only gameplay-earned coins, not purchases
     _el('final-score').textContent = this.scoreSystem.score.toLocaleString();
     _el('final-coins').textContent = `+${earned} \uD83E\uDE99`;
-    overlayEl.classList.remove('hidden');
+    setTimeout(() => {
+      if (!this._isGameOver) return;
+      overlayEl.classList.remove('hidden');
+    }, overlayDelay);
     // Auto-save progress to cloud
     if (_currentUser) saveCloudSave(_currentUser.uid, _cloudSavePayload()).catch(() => {});
   }
@@ -2325,10 +4305,13 @@ class Game {
   restart({ mode = this._mode } = {}) {
     this._finishRotateMode();
     this._mode       = mode;
+    this._challengeMode = mode === 'challenge';
+    this._challengeLevel = 1;
     this._vsMode     = mode === 'vs';
     this._vsRole     = null;
     this._vsRng      = null;
     this._isGameOver = false;
+    this.renderer.setDragEnabled(true);
     this.grid.reset();
     this.scoreSystem.reset();
     this.particles._particles = [];
@@ -2339,8 +4322,12 @@ class Game {
     this._tutorial.active = mode === 'endless' && localStorage.getItem(TUTORIAL_KEY) !== '1';
     this._tutorial.step = 0;
     this._tutorial.target = null;
+    this._mementoHistory = [];
     this.renderer.setSkin(economy.getActiveSkin());
-    if (this._tutorial.active) this._startTutorial();
+    if (this._challengeMode) {
+      _setVisible(tutorialOverlay, false);
+      this._startChallengeLevel(1);
+    } else if (this._tutorial.active) this._startTutorial();
     else {
       _setVisible(tutorialOverlay, false);
       this._dealTray();
@@ -2375,6 +4362,19 @@ class Game {
 
     if (id === 'rotate_block') {
       this._enterRotateMode();
+      return;
+    }
+
+    if (id === 'undo_move') {
+      const m = this._mementoHistory.pop();
+      if (!m) {
+        market._inv[id] = (market._inv[id] ?? 0) + 1;
+        market._save();
+        showToast('Geri alinacak hamle yok.');
+        return;
+      }
+      this._restoreMemento(m);
+      showToast('Son hamle geri alindi.');
       return;
     }
 

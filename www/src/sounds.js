@@ -15,6 +15,7 @@ let _sfxVolume    = parseFloat(localStorage.getItem('weaverSfxVolume') ?? '1');
 let _musicVolume  = parseFloat(localStorage.getItem('weaverMusicVolume') ?? '0.35');
 let _bgmAudio     = null;
 let _bgmProbe     = null;
+let _skipFileSfx  = false;
 
 const SFX_BASE = './assets/sfx';
 const MUSIC_URL = './assets/music/theme.mp3';
@@ -86,6 +87,12 @@ export function setMusicVolume(v) {
 
 export function getMusicVolume() { return _musicVolume; }
 
+export function setSkipFileSfx(skip) {
+  _skipFileSfx = !!skip;
+}
+
+export function getSkipFileSfx() { return _skipFileSfx; }
+
 function getCtx() {
   if (!_ctx) _ctx = new (window.AudioContext || window.webkitAudioContext)();
   return _ctx;
@@ -147,6 +154,7 @@ function _probeFile(key) {
 }
 
 function _playFile(key) {
+  if (_skipFileSfx) return false;
   const volume = _effectiveSfxVolume();
   if (volume <= 0) return true;
   const known = _availability.get(key);

@@ -50,6 +50,11 @@ export const SHAPES = {
   PLUS:    { cells: [[0,1],[1,0],[1,1],[1,2],[2,1]], size: 5 },
   H5:      { cells: [[0,0],[0,1],[0,2],[0,3],[0,4]],size: 5 },
   V5:      { cells: [[0,0],[1,0],[2,0],[3,0],[4,0]],size: 5 },
+
+  // 6 / 9-cell (early score acceleration)
+  RECT23H: { cells: [[0,0],[0,1],[0,2],[1,0],[1,1],[1,2]], size: 6 },
+  RECT23V: { cells: [[0,0],[1,0],[2,0],[0,1],[1,1],[2,1]], size: 6 },
+  RECT33:  { cells: [[0,0],[0,1],[0,2],[1,0],[1,1],[1,2],[2,0],[2,1],[2,2]], size: 9 },
 };
 
 export const SHAPE_KEYS = Object.keys(SHAPES);
@@ -108,6 +113,104 @@ function weightedChoice(options) {
   return options.at(-1).value;
 }
 
+function _countShapeFits(grid, shapeKey) {
+  const shape = SHAPES[shapeKey];
+  if (!shape) return 0;
+  let fitCount = 0;
+  const maxR = 8 - (Math.max(...shape.cells.map(([r]) => r)) + 1);
+  const maxC = 8 - (Math.max(...shape.cells.map(([, c]) => c)) + 1);
+  for (let r = 0; r <= maxR; r++) {
+    for (let c = 0; c <= maxC; c++) {
+      const positions = shape.cells.map(([dr, dc]) => ({ row: r + dr, col: c + dc }));
+      if (grid.canPlace(positions)) fitCount++;
+    }
+  }
+  return fitCount;
+}
+
+function _collectLineNeeds(grid) {
+  const SIZE = 8;
+  const rowFilled = Array(SIZE).fill(0);
+  const colFilled = Array(SIZE).fill(0);
+
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      if (!grid.isEmpty(r, c)) {
+        rowFilled[r]++;
+        colFilled[c]++;
+      }
+    }
+  }
+
+  const rowNeedWeight = rowFilled.map(v => {
+    const empty = SIZE - v;
+    if (empty <= 0 || empty > 5) return 0;
+    if (empty === 1) return 14;
+    if (empty === 2) return 10;
+    if (empty === 3) return 7;
+    if (empty === 4) return 4;
+    return 2;
+  });
+
+  const colNeedWeight = colFilled.map(v => {
+    const empty = SIZE - v;
+    if (empty <= 0 || empty > 5) return 0;
+    if (empty === 1) return 14;
+    if (empty === 2) return 10;
+    if (empty === 3) return 7;
+    if (empty === 4) return 4;
+    return 2;
+  });
+
+  return { rowFilled, colFilled, rowNeedWeight, colNeedWeight };
+}
+
+function _shapePlacementStats(grid, shapeKey, needs) {
+  const shape = SHAPES[shapeKey];
+  if (!shape) return { fitCount: 0, bestNeedScore: 0, bestClears: 0 };
+
+  const SIZE = 8;
+  const maxR = SIZE - (Math.max(...shape.cells.map(([r]) => r)) + 1);
+  const maxC = SIZE - (Math.max(...shape.cells.map(([, c]) => c)) + 1);
+  const { rowFilled, colFilled, rowNeedWeight, colNeedWeight } = needs;
+
+  let fitCount = 0;
+  let bestNeedScore = 0;
+  let bestClears = 0;
+
+  for (let r = 0; r <= maxR; r++) {
+    for (let c = 0; c <= maxC; c++) {
+      const positions = shape.cells.map(([dr, dc]) => ({ row: r + dr, col: c + dc }));
+      if (!grid.canPlace(positions)) continue;
+      fitCount++;
+
+      const addRow = Array(SIZE).fill(0);
+      const addCol = Array(SIZE).fill(0);
+      let needScore = 0;
+
+      for (const p of positions) {
+        addRow[p.row]++;
+        addCol[p.col]++;
+        needScore += rowNeedWeight[p.row] + colNeedWeight[p.col];
+      }
+
+      let clears = 0;
+      for (let rr = 0; rr < SIZE; rr++)
+        if (addRow[rr] > 0 && rowFilled[rr] + addRow[rr] === SIZE) clears++;
+      for (let cc = 0; cc < SIZE; cc++)
+        if (addCol[cc] > 0 && colFilled[cc] + addCol[cc] === SIZE) clears++;
+
+      needScore += clears * 28;
+      needScore += shape.size * 0.4;
+
+      if (needScore > bestNeedScore) bestNeedScore = needScore;
+      if (clears > bestClears) bestClears = clears;
+    }
+  }
+
+  return { fitCount, bestNeedScore, bestClears };
+}
+
 /**
  * Analyses the grid's empty-cell layout to bias shape selection.
  *
@@ -134,6 +237,39 @@ function analyseGrid(grid) {
     bias.L3  = 1.4;
     bias.J3  = 1.4;
   }
+
+  // Count 2x3 and 3x3 empty zones — favours large rectangles in early game
+  let rect23h = 0;
+  let rect23v = 0;
+  let rect33 = 0;
+  for (let r = 0; r < SIZE - 1; r++) {
+    for (let c = 0; c < SIZE - 2; c++) {
+      const ok =
+        grid.isEmpty(r, c) && grid.isEmpty(r, c + 1) && grid.isEmpty(r, c + 2) &&
+        grid.isEmpty(r + 1, c) && grid.isEmpty(r + 1, c + 1) && grid.isEmpty(r + 1, c + 2);
+      if (ok) rect23h++;
+    }
+  }
+  for (let r = 0; r < SIZE - 2; r++) {
+    for (let c = 0; c < SIZE - 1; c++) {
+      const ok =
+        grid.isEmpty(r, c) && grid.isEmpty(r + 1, c) && grid.isEmpty(r + 2, c) &&
+        grid.isEmpty(r, c + 1) && grid.isEmpty(r + 1, c + 1) && grid.isEmpty(r + 2, c + 1);
+      if (ok) rect23v++;
+    }
+  }
+  for (let r = 0; r < SIZE - 2; r++) {
+    for (let c = 0; c < SIZE - 2; c++) {
+      const ok =
+        grid.isEmpty(r, c) && grid.isEmpty(r, c + 1) && grid.isEmpty(r, c + 2) &&
+        grid.isEmpty(r + 1, c) && grid.isEmpty(r + 1, c + 1) && grid.isEmpty(r + 1, c + 2) &&
+        grid.isEmpty(r + 2, c) && grid.isEmpty(r + 2, c + 1) && grid.isEmpty(r + 2, c + 2);
+      if (ok) rect33++;
+    }
+  }
+  if (rect23h > 0) bias.RECT23H = 1.35;
+  if (rect23v > 0) bias.RECT23V = 1.35;
+  if (rect33 > 0)  bias.RECT33 = 1.15;
 
   // Count long horizontal strips
   let hStrip = 0;
@@ -213,10 +349,16 @@ function pickColor(grid, handColors, maxColor = COLOR_COUNT) {
  * @param {boolean} hard   if true, force-include at least one awkward piece
  * @returns {Block[]}
  */
-export function generateTray(grid, count = 4, hard = false, maxColor = COLOR_COUNT) {
+export function generateTray(grid, count = 4, hard = false, maxColor = COLOR_COUNT, opts = {}) {
+  const smartProfile = opts.smartProfile ?? 'normal'; // early | normal | hard
+  const profileAggression = smartProfile === 'early' ? 0.9 : smartProfile === 'hard' ? 0.4 : 0.65;
+  const smartAggression = Math.max(0, Math.min(1, Number(opts.smartAggression ?? profileAggression)));
   const shapeBias = analyseGrid(grid);
   const blocks    = [];
   const handColors= [];
+  const needs = _collectLineNeeds(grid);
+  const statsByShape = Object.fromEntries(SHAPE_KEYS.map(k => [k, _shapePlacementStats(grid, k, needs)]));
+  const fitByShape = Object.fromEntries(SHAPE_KEYS.map(k => [k, statsByShape[k]?.fitCount ?? _countShapeFits(grid, k)]));
 
   for (let i = 0; i < count; i++) {
     // Shape selection
@@ -231,7 +373,28 @@ export function generateTray(grid, count = 4, hard = false, maxColor = COLOR_COU
     } else {
       shapeOptions = SHAPE_KEYS.map(key => ({
         value: key,
-        weight: (shapeBias[key] ?? 1) * (SHAPES[key].size <= 3 ? 0.8 : 1.2),
+        weight: (() => {
+          let w = (shapeBias[key] ?? 1) * (SHAPES[key].size <= 3 ? 0.8 : 1.2);
+          const fits = fitByShape[key] ?? 0;
+          const needScore = statsByShape[key]?.bestNeedScore ?? 0;
+          const clearScore = statsByShape[key]?.bestClears ?? 0;
+          if (smartProfile === 'early') {
+            // Early game: strongly favour blocks that can complete rows/cols and stay playable.
+            w *= Math.max(0.12, fits + 0.2);
+            w *= 1 + Math.min(1.25, (needScore / 28) * (0.35 + smartAggression));
+            if (clearScore > 0) w *= 1 + clearScore * (0.28 + smartAggression * 0.6);
+            if (SHAPES[key].size <= 3) w *= 1.3;
+            if (key === 'RECT23H' || key === 'RECT23V') w *= (1.25 + smartAggression * 0.45);
+            if (key === 'RECT33') w *= (1.05 + smartAggression * 0.4);
+            if (SHAPES[key].size >= 5 && key !== 'RECT23H' && key !== 'RECT23V' && key !== 'RECT33') w *= 0.62;
+          } else {
+            // Later stages still prefer placeable and line-completing options.
+            w *= Math.max(0.2, 0.6 + fits * 0.35);
+            w *= 1 + Math.min(0.8, (needScore / 48) * (0.25 + smartAggression));
+            if (clearScore > 0) w *= 1 + clearScore * (0.18 + smartAggression * 0.35);
+          }
+          return w;
+        })(),
       }));
     }
 
@@ -239,6 +402,39 @@ export function generateTray(grid, count = 4, hard = false, maxColor = COLOR_COU
     const colorID  = pickColor(grid, handColors, maxColor);
     handColors.push(colorID);
     blocks.push(new Block(shapeKey, colorID));
+  }
+
+  // Guarantee at least one immediately playable block in tray.
+  const anyPlayable = blocks.some(b => (fitByShape[b.shapeKey] ?? 0) > 0);
+  if (!anyPlayable) {
+    const playableKey = SHAPE_KEYS
+      .filter(k => (fitByShape[k] ?? 0) > 0)
+      .sort((a, b) => (fitByShape[b] ?? 0) - (fitByShape[a] ?? 0))[0];
+    if (playableKey) blocks[0] = new Block(playableKey, pickColor(grid, [], maxColor));
+  }
+
+  // Smart profile: if possible, guarantee a shape that can immediately clear a row/column.
+  const lineClearKey = SHAPE_KEYS
+    .filter(k => (statsByShape[k]?.bestClears ?? 0) > 0)
+    .sort((a, b) => (statsByShape[b]?.bestClears ?? 0) - (statsByShape[a]?.bestClears ?? 0))[0];
+  const guaranteeLineClear = lineClearKey && (smartAggression >= 0.42 || smartProfile === 'early');
+  if (guaranteeLineClear) {
+    const alreadyHasClear = blocks.some(b => (statsByShape[b.shapeKey]?.bestClears ?? 0) > 0);
+    if (!alreadyHasClear) {
+      const replaceIdx = smartProfile === 'early' ? 1 : (count - 1);
+      blocks[replaceIdx] = new Block(lineClearKey, pickColor(grid, handColors, maxColor));
+    }
+  }
+
+  // Early mode target: at least two playable choices to reduce dead starts.
+  if (smartProfile === 'early' && smartAggression >= 0.45) {
+    const playableNow = blocks.filter(b => (fitByShape[b.shapeKey] ?? 0) > 0).length;
+    if (playableNow < 2) {
+      const keys = SHAPE_KEYS
+        .filter(k => (fitByShape[k] ?? 0) > 0)
+        .sort((a, b) => (fitByShape[b] ?? 0) - (fitByShape[a] ?? 0));
+      if (keys[0]) blocks[count - 1] = new Block(keys[0], pickColor(grid, [], maxColor));
+    }
   }
 
   return blocks;
