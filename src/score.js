@@ -2,7 +2,8 @@
  * score.js — Scoring system with combo multiplier.
  *
  * Formula:
- *   Score = (deletedBlocks × BASE_POINTS) + (comboMultiplier²  × COMBO_BONUS)
+ *   Score = deletedBlocks × BASE_POINTS_PER_BLOCK × comboFactor
+ *   comboFactor = 1 + (comboMultiplier - 1) × COMBO_STEP_PER_BLOCK / BASE_POINTS_PER_BLOCK
  *
  * Special combo labels:
  *   "Mega Weaver"  — same move clears both a row/col AND a color cluster
@@ -10,8 +11,8 @@
  *   "Color Burst"  — only color cluster cleared (no line)
  */
 
-const BASE_POINTS  = 10;
-const COMBO_BONUS  = 50;
+const BASE_POINTS_PER_BLOCK = 12;
+const COMBO_STEP_PER_BLOCK = 3;
 
 export class ScoreSystem {
   constructor() {
@@ -49,8 +50,8 @@ export class ScoreSystem {
     else if (hasClear)  label = 'LINE CLEAR!';
     else if (hasCluster) label = 'COLOR BURST!';
 
-    const delta = (deletedBlocks * BASE_POINTS)
-                + (this.comboMultiplier ** 2) * COMBO_BONUS;
+    const comboFactor = 1 + (Math.max(0, this.comboMultiplier - 1) * COMBO_STEP_PER_BLOCK) / BASE_POINTS_PER_BLOCK;
+    const delta = deletedBlocks * BASE_POINTS_PER_BLOCK * comboFactor;
 
     this.score += Math.round(delta);
 

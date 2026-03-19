@@ -33,11 +33,25 @@
 
   <!-- ══════════ START SCREEN ══════════ -->
   <div id="start-screen">
-    <button id="ss-friends-btn" class="ss-corner-btn hidden" aria-label="Arkadaslar">👥</button>
+    <button id="ss-friends-btn" class="ss-corner-btn hidden" aria-label="Sosyal">
+      <span class="ss-corner-btn-icon" aria-hidden="true">👥</span>
+      <span class="ss-corner-btn-label">SOSYAL</span>
+      <span id="ss-friends-unread-badge" class="ss-friends-unread-badge hidden">0</span>
+    </button>
     <div id="friends-panel" class="hidden" aria-live="polite">
       <div class="friends-panel-head">
         <span id="friends-panel-title">Arkadaslar</span>
-        <button id="friends-panel-close-btn" aria-label="Kapat">✕</button>
+        <div class="friends-panel-head-actions">
+          <button id="friends-groups-btn" type="button" aria-label="Gruplar">Gruplar</button>
+          <button id="friends-panel-close-btn" aria-label="Kapat">✕</button>
+        </div>
+      </div>
+      <div id="friends-group-quick" class="hidden" aria-live="polite">
+        <div class="friends-group-quick-head">
+          <span id="friends-group-quick-title">Aktif Grup</span>
+          <button id="friends-group-quick-open-btn" type="button">Gruba Git</button>
+        </div>
+        <div id="friends-group-members"></div>
       </div>
       <div id="friends-requests"></div>
       <div id="friends-list"></div>
@@ -45,9 +59,11 @@
         <div class="friends-chat-head">
           <button id="friends-chat-back-btn" type="button" aria-label="Geri">←</button>
           <span id="friends-chat-title">Sohbet</span>
+          <button id="friends-chat-mic-toggle-btn" type="button" class="friends-chat-mic-btn" aria-label="Mikrofon">🎤</button>
         </div>
         <div id="friends-chat-messages"></div>
         <div class="friends-chat-input-row">
+          <button id="friends-chat-voice-send-btn" type="button" class="friends-chat-voice-btn" aria-label="Ses Gonder">🎙️</button>
           <input id="friends-chat-input" maxlength="320" autocomplete="off" placeholder="Mesaj yaz..." />
           <button id="friends-chat-send-btn" type="button">Gonder</button>
         </div>
@@ -225,6 +241,11 @@
       </div>
       <div id="vs-rank-result" class="vs-rank-result"></div>
       <button id="vs-rematch-btn" class="vs-big-btn">🔄 Tekrar Oyna</button>
+      <div id="vs-rematch-status" class="vs-rematch-status"></div>
+      <div class="vs-rematch-icons" aria-live="polite">
+        <span id="vs-rematch-me-icon" class="vs-rematch-icon">SEN</span>
+        <span id="vs-rematch-opp-icon" class="vs-rematch-icon">RAKIP</span>
+      </div>
       <button id="vs-exit-btn" class="vs-exit-btn">Ana Menü</button>
     </div>
 
@@ -244,9 +265,11 @@
           </span>
         </div>
         <div id="coin-hud"><span class="coin-icon">🪙</span><span id="coin-display">0</span></div>
-          <div class="hbox"><span class="hlabel">BEST</span><span id="best-display">0</span></div>
-          <div id="play-rank-pill" class="rank-summary-pill rank-summary-pill--compact">BRONZ • 0 RP</div>
+        <div id="best-hud" class="hbox"><span class="hlabel">BEST</span><span id="best-display">0</span></div>
+        <div id="vs-timer" class="vs-timer hidden" aria-live="polite">00:00.000</div>
+        <div id="play-rank-pill" class="rank-summary-pill rank-summary-pill--compact">BRONZ • 0 RP</div>
       </div>
+          <div id="ability-hud" class="ability-hud" aria-live="polite"></div>
       <button id="vs-menu-toggle-btn" class="hidden" aria-label="VS Menu">☰</button>
       <div id="vs-menu-panel" class="hidden" aria-label="VS Dropdown Menu">
         <button id="vs-add-friend-btn" class="vs-menu-btn">
@@ -340,6 +363,7 @@
         </div>
       </div>
       <button id="buy-random-btn">🎲 Buy Random Skin — 100 🪙</button>
+      <button id="skins-randomize-toggle-btn" class="skins-randomize-toggle-btn">🎛️ Sahip Olunan Skinleri Rastgelele: KAPALI</button>
       <div id="skins-grid"></div>
     </div>
 
@@ -458,6 +482,184 @@
       </div>
     </div>
 
+    <!-- ── PAGE: GROUPS ── -->
+    <div id="page-groups" class="page hidden">
+      <div id="groups-header">
+        <button id="groups-back-btn" class="groups-back-btn" aria-label="Back">←</button>
+        <h2 id="groups-page-title">GRUPLAR</h2>
+        <button id="groups-create-btn" class="groups-create-btn" aria-label="Yeni Grup">+</button>
+      </div>
+      
+      <!-- List of My Groups -->
+      <div id="groups-my-list-section">
+        <div class="groups-section-head">
+          <div class="groups-section-title">Gruplarım</div>
+          <button id="groups-join-btn" class="groups-join-btn" type="button">Gruba Katıl</button>
+        </div>
+        <div id="groups-my-list"></div>
+      </div>
+
+      <!-- Create Group Dialog -->
+      <div id="groups-create-modal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>Yeni Grup Oluştur</h3>
+            <button class="modal-close-btn">&times;</button>
+          </div>
+          <div class="modal-body">
+            <input id="create-group-name-input" type="text" maxlength="32" placeholder="Grup Adı (örn. Eagles)" />
+            <div class="create-group-player-select">
+              <label class="radio-label">
+                <input type="radio" name="max-players" value="3" checked /> 3v3
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="max-players" value="4" /> 4v4
+              </label>
+            </div>
+            <div id="create-group-cost-info" class="create-group-cost-info">
+              Aidatı: <strong id="create-group-cost-val">150 🪙</strong>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button id="create-group-cancel-btn" class="modal-btn modal-btn--secondary">İptal</button>
+            <button id="create-group-submit-btn" class="modal-btn modal-btn--primary">Grubu Oluştur</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Join Group Dialog -->
+      <div id="groups-join-modal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>Gruba Katıl</h3>
+            <button class="modal-close-btn">&times;</button>
+          </div>
+          <div class="modal-body">
+            <input id="join-group-code-input" type="text" maxlength="12" placeholder="Grup Kodu veya ID'si" />
+          </div>
+          <div class="modal-footer">
+            <button id="join-group-cancel-btn" class="modal-btn modal-btn--secondary">İptal</button>
+            <button id="join-group-submit-btn" class="modal-btn modal-btn--primary">Katıl</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Group Detail View (shown when group is selected) -->
+      <div id="groups-detail-view" class="hidden">
+        <div id="group-detail-header">
+          <button id="group-detail-back-btn" aria-label="Geri">←</button>
+          <h3 id="group-detail-name"></h3>
+          <button id="group-invite-friend-btn" type="button">Arkadas Davet</button>
+          <span id="group-detail-id" class="group-id-badge">ID: -</span>
+          <span id="group-detail-status" class="group-status-badge">OPEN</span>
+        </div>
+        <div id="group-invite-panel" class="group-invite-panel hidden">
+          <div class="group-invite-panel-head">
+            <span>Arkadaslarini sec ve davet gonder</span>
+            <button id="group-invite-panel-close-btn" type="button">Kapat</button>
+          </div>
+          <div class="group-invite-tools">
+            <button id="group-invite-refresh-btn" type="button">Yenile</button>
+            <label class="group-invite-toggle">
+              <input id="group-invite-online-only-toggle" type="checkbox" />
+              <span>Sadece aktif</span>
+            </label>
+          </div>
+          <input id="group-invite-search-input" type="text" maxlength="48" placeholder="Arkadas ara..." autocomplete="off" />
+          <div id="group-invite-meta" class="group-invite-meta-line">Yenileme: 0</div>
+          <div id="group-invite-friends-list" class="group-invite-friends-list"></div>
+        </div>
+        
+        <!-- Tabs: Members / Chat / Settings -->
+        <div id="group-detail-tabs" class="group-tabs">
+          <button class="group-tab" data-tab="members">👥 Üyeler</button>
+          <button class="group-tab group-tab--chat" data-tab="chat">💬 Sohbet <span id="group-chat-unread-badge" class="group-chat-unread-badge hidden">0</span></button>
+          <button class="group-tab" data-tab="settings">⚙️ Ayarlar</button>
+        </div>
+
+        <!-- Tab: Members -->
+        <div id="group-tab-members" class="group-tab-pane">
+          <div id="group-members-list"></div>
+          <div class="group-actions">
+            <button id="group-ready-btn" class="group-action-btn group-action-btn--primary">Hazır</button>
+            <button id="group-start-live-btn" class="group-action-btn group-action-btn--accent">Canlı Başlat</button>
+            <button id="group-leave-btn" class="group-action-btn group-action-btn--danger">Gruptan Ayrıl</button>
+          </div>
+          <div id="group-live-panel" class="group-live-panel hidden" aria-live="polite">
+            <div class="group-live-head">
+              <span id="group-live-badge" class="group-live-badge">LIVE 3P</span>
+              <span id="group-live-turn">Sıra: -</span>
+            </div>
+            <div id="group-live-scoreboard" class="group-live-scoreboard"></div>
+          </div>
+        </div>
+
+        <!-- Tab: Chat -->
+        <div id="group-tab-chat" class="group-tab-pane hidden">
+          <div class="group-chat-live-row">
+            <button id="group-voice-live-btn" type="button" class="group-action-btn">🎤 Canlı Ses</button>
+            <span id="group-voice-live-status">Canlı ses kapalı</span>
+          </div>
+          <div id="group-chat-messages"></div>
+          <div class="group-chat-input-row">
+            <input id="group-chat-input" maxlength="320" autocomplete="off" placeholder="Mesaj yaz..." />
+            <button id="group-chat-send-btn" type="button">Gonder</button>
+          </div>
+        </div>
+
+        <!-- Tab: Settings (creator only) -->
+        <div id="group-tab-settings" class="group-tab-pane hidden">
+          <div class="group-setting-row">
+            <label>Turnuva Modu:</label>
+            <input type="checkbox" id="group-tournament-toggle" />
+          </div>
+          <div class="group-setting-row">
+            <label>Hedef Puan:</label>
+            <select id="group-vs-target-score-select">
+              <option value="2000">2000</option>
+              <option value="3000">3000</option>
+              <option value="5000">5000</option>
+              <option value="10000">10000</option>
+            </select>
+          </div>
+          <div class="group-setting-row">
+            <label>Hamle Süresi:</label>
+            <select id="group-vs-timer-seconds-select">
+              <option value="30">00:30</option>
+              <option value="45">00:45</option>
+              <option value="60">01:00</option>
+              <option value="90">01:30</option>
+              <option value="120">02:00</option>
+            </select>
+          </div>
+          <div class="group-setting-row">
+            <label>Ses Etkinleştirilsin:</label>
+            <input type="checkbox" id="group-voice-toggle" checked />
+          </div>
+          <div class="group-setting-row">
+            <label>Bahisler:</label>
+            <input type="checkbox" id="group-wagers-toggle" checked />
+          </div>
+          <div id="group-wager-box" class="group-wager-box">
+            <div class="group-wager-title">Bahis Odası Aç</div>
+            <div class="group-wager-form">
+              <select id="group-wager-opponent-select"></select>
+              <input id="group-wager-stake-input" type="number" min="10" step="10" value="50" />
+              <button id="group-wager-create-btn" class="group-action-btn group-action-btn--accent" type="button">Teklif Gönder</button>
+            </div>
+            <div id="group-wager-list" class="group-wager-list"></div>
+          </div>
+          <button id="group-start-bracket-btn" class="group-action-btn group-action-btn--accent" type="button">Turnuvayı Başlat</button>
+          <div id="group-bracket-panel" class="group-bracket-panel hidden" aria-live="polite">
+            <div id="group-bracket-title" class="group-bracket-title">Bracket</div>
+            <div id="group-bracket-rounds" class="group-bracket-rounds"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── BOTTOM NAV ── -->
     <nav id="bottom-nav">
       <button class="nav-btn nav-btn--menu" id="nav-menu-btn">
@@ -513,9 +715,21 @@
   <!-- ══════════ OVERLAYS ══════════ -->
   <div id="feedback-toast"></div>
 
+  <div id="nav-loader" class="hidden" aria-live="polite" aria-label="Yukleniyor">
+    <div class="boot-loader-inner">
+      <div class="boot-block-spin" aria-hidden="true">
+        <span></span><span></span><span></span><span></span>
+      </div>
+      <div class="boot-loader-text">Yukleniyor...</div>
+    </div>
+  </div>
+
   <div id="profile-setup-overlay" class="hidden" aria-live="polite">
     <div id="profile-setup-card">
-      <div class="profile-setup-title">Profil Olustur</div>
+      <div class="profile-setup-head">
+        <div class="profile-setup-title">Profil Olustur</div>
+        <button id="profile-setup-close-btn" type="button" aria-label="Kapat">✕</button>
+      </div>
       <label class="profile-field">
         <span>Gorunen Ad</span>
         <input id="profile-display-name-input" maxlength="32" placeholder="Ad Soyad" />
@@ -602,6 +816,7 @@
         <div class="go-stat"><span class="go-label">COINS EARNED</span><strong id="final-coins">+0 🪙</strong></div>
       </div>
       <button id="restart-btn">Play Again</button>
+      <button id="share-highscore-btn" class="hidden">Skoru Leaderboard'da Paylaş</button>
       <button id="gameover-menu-btn">Ana Menü</button>
     </div>
   </div>

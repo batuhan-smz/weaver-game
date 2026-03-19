@@ -161,9 +161,9 @@ export class Renderer {
       const row = g.row+dr, col = g.col+dc;
       if (row<0||row>=Grid.SIZE||col<0||col>=Grid.SIZE) continue;
       const x=this._cellX(col), y=this._cellY(row);
-      ctx.fillStyle   = g.canPlace ? hexToRgba(hex,.4) : 'rgba(255,50,50,0.25)';
+      ctx.fillStyle   = g.canPlace ? hexToRgba(hex,.55) : 'rgba(255,50,50,0.38)';
       ctx.strokeStyle = g.canPlace ? hex : '#ff4444';
-      ctx.lineWidth   = 2;
+      ctx.lineWidth   = 2.4;
       _rr(ctx,x,y,this.CELL,this.CELL,this.RADIUS);
       ctx.fill(); ctx.stroke();
     }
@@ -223,8 +223,31 @@ export class Renderer {
     return false;
   }
 
+  _isPointerNearSnap(block, snapRow, snapCol, canvasX, canvasY) {
+    const step = this.CELL + this.GAP;
+    const bb = block.getBoundingBox();
+    const blockW = bb.cols * this.CELL + (bb.cols - 1) * this.GAP;
+    const blockH = bb.rows * this.CELL + (bb.rows - 1) * this.GAP;
+    const snapX = this.BOARD_OFFSET_X + this.PADDING + snapCol * step + blockW / 2;
+    const snapY = this.BOARD_OFFSET_Y + this.PADDING + snapRow * step + blockH / 2;
+    const dist = Math.hypot(canvasX - snapX, canvasY - snapY);
+    const snapRadiusPx = Math.max(36, Math.min(48, this.CELL * 1.4));
+    return dist <= snapRadiusPx;
+  }
+
   _updateGhostFromPoint(x, y) {
     if (!this.dragging) return;
+    const minDragForGhostPx = this.dragging.isTouch ? 8 : 4;
+    const draggedPx = Math.hypot(
+      x - (this.dragging.pickup?.x ?? x),
+      y - (this.dragging.pickup?.y ?? y),
+    );
+    if (draggedPx < minDragForGhostPx) {
+      this._lastSnap = null;
+      this.drawGhostAndHover(null, -1, -1, false);
+      return;
+    }
+
     const bb   = this.dragging.block.getBoundingBox();
     const step = this.CELL + this.GAP;
     let offX = this.dragging.thumbOffset?.x ?? 0;
@@ -258,13 +281,15 @@ export class Renderer {
       return;
     }
 
-    const snapped = this._snapToNearest(block, rawRow, rawCol, 2);
-    this._lastSnap = snapped;
-    if (!snapped) {
+    const snapped = this._snapToNearest(block, rawRow, rawCol, 6);
+    this._lastSnap = snapped && this._isPointerNearSnap(block, snapped.row, snapped.col, canvasX, canvasY)
+      ? snapped
+      : null;
+    if (!this._lastSnap) {
       this.drawGhostAndHover(null, -1, -1, false);
       return;
     }
-    this.drawGhostAndHover(block, snapped.row, snapped.col, true);
+    this.drawGhostAndHover(block, this._lastSnap.row, this._lastSnap.col, true);
   }
 
   _ensureDragProxy(block, sourceEl) {
@@ -378,12 +403,13 @@ export class Renderer {
         r: Math.max(rect.width, rect.height) * 0.56,
       };
       const thumbOffset = isTouch
-        ? (this._handedness === 'left' ? { x: 46, y: -82 } : this._handedness === 'right' ? { x: -46, y: -82 } : { x: 0, y: -82 })
+        ? (this._handedness === 'left' ? { x: 46, y: -92 } : this._handedness === 'right' ? { x: -46, y: -92 } : { x: 0, y: -92 })
         : { x: -18, y: -20 };
       this.dragging = {
         block,
         el,
         idx,
+        isTouch,
         vx: 0,
         vy: 0,
         lastMove: null,
@@ -391,7 +417,7 @@ export class Renderer {
         thumbOffset,
       };
       el.classList.add('dragging');
-      // Show ghost immediately at the initial touch/click position
+      // Start from touch point; ghost appears after a brief drag threshold.
       const pt = e.touches ? e.touches[0] : e;
       this._ensureDragProxy(block, el);
       this._updateDragProxy(pt.clientX, pt.clientY);

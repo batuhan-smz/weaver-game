@@ -45,8 +45,8 @@ async function _doInit() {
   const [
     { initializeApp, getApp },
     { getAuth, GoogleAuthProvider, signInWithPopup, signInWithCredential, signOut, onAuthStateChanged },
-    { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
-      collection, query, where, limit, getDocs, serverTimestamp },
+    { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot,
+      collection, query, where, limit, getDocs, serverTimestamp, arrayUnion, arrayRemove },
   ] = await Promise.all([
     import(`${CDN}/firebase-app.js`),
     import(`${CDN}/firebase-auth.js`),
@@ -64,8 +64,8 @@ async function _doInit() {
   _s = {
     auth, db,
     GoogleAuthProvider, signInWithPopup, signInWithCredential, signOut, onAuthStateChanged,
-    doc, getDoc, setDoc, updateDoc, onSnapshot,
-    collection, query, where, limit, getDocs, serverTimestamp,
+    doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot,
+    collection, query, where, limit, getDocs, serverTimestamp, arrayUnion, arrayRemove,
   };
   return _s;
 }

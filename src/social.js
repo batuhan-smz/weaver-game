@@ -125,12 +125,14 @@ export async function sendMatchChatMessage(matchId, senderUser, text) {
   });
 }
 
-export async function sendFriendChatMessage(friendUid, senderUser, text) {
+export async function sendFriendChatMessage(friendUid, senderUser, payload) {
   const uid = senderUser?.uid;
-  const clean = String(text || '').trim();
+  const clean = typeof payload === 'string' ? String(payload || '').trim() : String(payload?.text || '').trim();
+  const audioData = typeof payload === 'object' ? String(payload?.audioData || '').trim() : '';
+  const type = audioData ? 'audio' : 'text';
   if (!uid) throw new Error('Sign-in required.');
   if (!friendUid) throw new Error('Friend not found.');
-  if (!clean) return;
+  if (!clean && !audioData) return;
 
   const s = await getFirebaseServices();
   const chatId = _friendDocId(uid, friendUid);
@@ -138,7 +140,9 @@ export async function sendFriendChatMessage(friendUid, senderUser, text) {
   await s.setDoc(s.doc(s.db, 'friendChats', chatId, 'messages', msgId), {
     uid,
     name: _displayName(senderUser),
+    type,
     text: clean.slice(0, 320),
+    audioData: audioData ? audioData.slice(0, 350000) : null,
     createdAt: Date.now(),
     createdAtServer: s.serverTimestamp(),
   });
@@ -157,7 +161,9 @@ export function subscribeFriendChat(myUid, friendUid, cb) {
           id: d.id,
           uid: data.uid || '',
           name: data.name || 'Player',
+          type: data.type || 'text',
           text: data.text || '',
+          audioData: data.audioData || null,
           createdAt: Number(data.createdAt || 0),
         };
       });
@@ -229,7 +235,8 @@ export function subscribeFriends(user, cb) {
   const uid = user?.uid;
   if (!uid) return () => {};
 
-  let _unsubFriends = () => {};
+  const _sourceUnsubs = [];
+  const _sourceDocs = new Map();
   const _friendDocUnsubs = new Map();
   const _friendRows = new Map();
 
@@ -238,32 +245,38 @@ export function subscribeFriends(user, cb) {
     cb(rows);
   }
 
-  getFirebaseServices().then(s => {
-    const q = s.query(
-      s.collection(s.db, 'friends'),
-      s.where('members', 'array-contains', uid),
-    );
+  function _isAcceptedFriend(data = {}) {
+    const status = String(data.status || data.state || '').toLowerCase();
+    if (status === 'accepted' || status === 'friend' || status === 'friends' || status === 'active') return true;
+    if (data.isFriend === true || data.accepted === true) return true;
+    return false;
+  }
 
-    _unsubFriends = s.onSnapshot(q, snap => {
-      const accepted = [];
-      snap.docs.forEach(d => {
-        const data = d.data() || {};
-        if (data.status !== 'accepted') return;
-        const members = Array.isArray(data.members) ? data.members : [];
-        const otherUid = members.find(m => m !== uid);
-        if (otherUid) accepted.push(otherUid);
-      });
+  function _resolveOtherUid(data = {}, myUid = '') {
+    const members = Array.isArray(data.members) ? data.members : [];
+    const fromMembers = members.find(m => String(m || '') !== myUid);
+    if (fromMembers) return String(fromMembers);
 
-      const keep = new Set(accepted);
-      for (const [otherUid, unsub] of _friendDocUnsubs.entries()) {
-        if (keep.has(otherUid)) continue;
-        unsub();
-        _friendDocUnsubs.delete(otherUid);
-        _friendRows.delete(otherUid);
-      }
+    // Legacy docs may not have members array and only store requester/addressee.
+    const requester = String(data.requesterUid || data.senderUid || '');
+    const addressee = String(data.addresseeUid || data.receiverUid || data.targetUid || '');
+    if (requester && requester !== myUid) return requester;
+    if (addressee && addressee !== myUid) return addressee;
+    return '';
+  }
 
-      accepted.forEach(otherUid => {
-        if (_friendDocUnsubs.has(otherUid)) return;
+  function _syncFriendUserSubscriptions(acceptedUids = []) {
+    const keep = new Set(acceptedUids);
+    for (const [otherUid, unsub] of _friendDocUnsubs.entries()) {
+      if (keep.has(otherUid)) continue;
+      unsub();
+      _friendDocUnsubs.delete(otherUid);
+      _friendRows.delete(otherUid);
+    }
+
+    acceptedUids.forEach(otherUid => {
+      if (_friendDocUnsubs.has(otherUid)) return;
+      getFirebaseServices().then(s => {
         const unsub = s.onSnapshot(s.doc(s.db, 'users', otherUid), docSnap => {
           const data = docSnap.data() || {};
           _friendRows.set(otherUid, {
@@ -276,14 +289,65 @@ export function subscribeFriends(user, cb) {
           _emit();
         });
         _friendDocUnsubs.set(otherUid, unsub);
-      });
-
-      _emit();
+      }).catch(() => {});
     });
+
+    _emit();
+  }
+
+  function _recomputeAcceptedFriends() {
+    const merged = new Map();
+    _sourceDocs.forEach(sourceMap => {
+      sourceMap.forEach((data, docId) => merged.set(docId, data));
+    });
+
+    const accepted = [];
+    merged.forEach(data => {
+      if (!_isAcceptedFriend(data)) return;
+      const otherUid = _resolveOtherUid(data, uid);
+      if (otherUid) accepted.push(otherUid);
+    });
+
+    const uniqAccepted = [...new Set(accepted)];
+    _syncFriendUserSubscriptions(uniqAccepted);
+  }
+
+  function _bindFriendSource(s, sourceKey, queryRef) {
+    const unsub = s.onSnapshot(queryRef, snap => {
+      const next = new Map();
+      snap.docs.forEach(d => {
+        next.set(d.id, d.data() || {});
+      });
+      _sourceDocs.set(sourceKey, next);
+      _recomputeAcceptedFriends();
+    });
+    _sourceUnsubs.push(unsub);
+  }
+
+  getFirebaseServices().then(s => {
+    const byMembers = s.query(
+      s.collection(s.db, 'friends'),
+      s.where('members', 'array-contains', uid),
+    );
+    const byRequester = s.query(
+      s.collection(s.db, 'friends'),
+      s.where('requesterUid', '==', uid),
+    );
+    const byAddressee = s.query(
+      s.collection(s.db, 'friends'),
+      s.where('addresseeUid', '==', uid),
+    );
+
+    _bindFriendSource(s, 'members', byMembers);
+    _bindFriendSource(s, 'requester', byRequester);
+    _bindFriendSource(s, 'addressee', byAddressee);
   }).catch(() => cb([]));
 
   return () => {
-    _unsubFriends();
+    _sourceUnsubs.forEach(unsub => {
+      try { unsub(); } catch {}
+    });
+    _sourceDocs.clear();
     for (const unsub of _friendDocUnsubs.values()) unsub();
     _friendDocUnsubs.clear();
     _friendRows.clear();
@@ -423,6 +487,87 @@ export async function sendVsInvite(senderUser, { targetUid, matchId, inviteCode 
     },
     { merge: true },
   );
+}
+
+export async function sendGroupInvite(senderUser, { targetUid, groupId, groupName = '' }) {
+  const senderUid = senderUser?.uid;
+  if (!senderUid) throw new Error('Sign-in required.');
+  if (!targetUid) throw new Error('Target player not found.');
+  if (!groupId) throw new Error('Group invite data missing.');
+
+  const s = await getFirebaseServices();
+  const inviteId = `grp_${groupId}_${senderUid}_${targetUid}`;
+  await s.setDoc(
+    s.doc(s.db, 'groupInvites', inviteId),
+    {
+      senderUid,
+      senderName: _displayName(senderUser),
+      targetUid,
+      groupId,
+      groupName: String(groupName || 'Grup').slice(0, 80),
+      status: 'pending',
+      createdAt: Date.now(),
+      createdAtServer: s.serverTimestamp(),
+      updatedAt: s.serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+export function subscribeIncomingGroupInvites(user, cb) {
+  const uid = user?.uid;
+  if (!uid) return () => {};
+
+  let _unsub = () => {};
+  getFirebaseServices().then(s => {
+    const q = s.query(
+      s.collection(s.db, 'groupInvites'),
+      s.where('targetUid', '==', uid),
+      s.where('status', '==', 'pending'),
+    );
+
+    _unsub = s.onSnapshot(q, snap => {
+      const rows = snap.docs.map(d => {
+        const data = d.data() || {};
+        return {
+          id: d.id,
+          senderUid: data.senderUid || '',
+          senderName: data.senderName || 'Player',
+          targetUid: data.targetUid || uid,
+          groupId: data.groupId || '',
+          groupName: data.groupName || 'Grup',
+          createdAt: Number(data.createdAt || 0),
+        };
+      }).sort((a, b) => b.createdAt - a.createdAt);
+      cb(rows);
+    });
+  }).catch(() => cb([]));
+
+  return () => _unsub();
+}
+
+export async function respondGroupInvite(user, inviteId, action) {
+  const uid = user?.uid;
+  if (!uid) throw new Error('Sign-in required.');
+  if (!inviteId) throw new Error('Invite not found.');
+  if (action !== 'accept' && action !== 'reject') throw new Error('Invalid invite action.');
+
+  const s = await getFirebaseServices();
+  const ref = s.doc(s.db, 'groupInvites', inviteId);
+  const snap = await s.getDoc(ref);
+  if (!snap.exists()) throw new Error('Invite not found.');
+
+  const data = snap.data() || {};
+  if (data.targetUid !== uid) throw new Error('Not allowed.');
+  if (data.status !== 'pending') throw new Error('Invite is no longer pending.');
+
+  await s.updateDoc(ref, {
+    status: action === 'accept' ? 'accepted' : 'rejected',
+    respondedByUid: uid,
+    respondedAt: Date.now(),
+    respondedAtServer: s.serverTimestamp(),
+    updatedAt: s.serverTimestamp(),
+  });
 }
 
 export function subscribeIncomingVsInvites(user, cb) {
